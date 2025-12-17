@@ -1,0 +1,111 @@
+# advBBS Docker Compose Configuration
+#
+# Usage:
+#   docker compose up -d                  # Start BBS + web config
+#   docker compose logs -f                # View logs
+#
+# Web config: http://localhost:7681 (dialog-based TUI in browser)
+#
+# Config is stored in the advbbs_data volume at /data/config.toml
+#
+# For serial connection (USB), uncomment the devices section below
+# For TCP connection, configure via web interface
+
+services:
+  advbbs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    image: advbbs:latest
+    container_name: advbbs
+    restart: unless-stopped
+
+    # Uncomment for USB serial connection to Meshtastic device
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    #   - /dev/ttyACM0:/dev/ttyACM0
+
+    ports:
+      # Web-based config interface (ttyd)
+      - "7681:7681"
+
+    volumes:
+      # Persistent data (database, config, backups)
+      - advbbs_data:/data
+
+      # Logs (optional - can also use docker logs)
+      - advbbs_logs:/var/log
+
+    # Run interactively for first-time setup wizard
+    stdin_open: true
+    tty: true
+
+    # Limit resources for RPi compatibility
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/data/advbbs.db').execute('SELECT 1')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Web reader interface (read-only access)
+  advbbs-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: advbbs:latest
+    container_name: advbbs-web
+    restart: unless-stopped
+    profiles:
+      - web  # Only start with: docker-compose --profile web up
+
+    command: ["python", "-m", "advbbs.web", "--config", "/data/config.toml"]
+
+    volumes:
+      - advbbs_data:/data:ro  # Read-only access to database and config
+
+    ports:
+      - "8080:8080"
+
+    depends_on:
+      - advbbs
+
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  advbbs_data:
+    name: advbbs_data
+  advbbs_logs:
+    name: advbbs_logs
+
+# Network for service communication
+networks:
+  default:
+    name: advbbs_network

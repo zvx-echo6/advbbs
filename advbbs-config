@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""
+FQ51BBS Configuration Tool Launcher
+
+Simple launcher for the Rich-based configuration interface.
+"""
+
+import sys
+import os
+
+# Add package to path if running from source
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if os.path.exists(os.path.join(script_dir, "fq51bbs")):
+    sys.path.insert(0, script_dir)
+
+from fq51bbs.cli.config_rich import main
+
+if __name__ == "__main__":
+    main()

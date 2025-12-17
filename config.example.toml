@@ -1,0 +1,119 @@
+# advBBS Configuration File
+# Copy to config.toml and modify as needed
+#
+# For Docker: mount as /app/config.toml
+
+[bbs]
+name = "advBBS"
+callsign = "FQ51"
+admin_password = "CHANGE_ME"       # REQUIRED: Change this!
+motd = "Welcome to advBBS!"
+max_message_age_days = 30
+announcement_interval_hours = 12   # 0 to disable
+
+[database]
+path = "/data/advbbs.db"          # Docker volume path
+backup_path = "/data/backups"
+backup_interval_hours = 24
+
+[meshtastic]
+connection_type = "serial"         # serial | tcp | ble
+serial_port = "/dev/ttyUSB0"       # For serial connection
+tcp_host = "localhost"             # For TCP connection
+tcp_port = 4403
+channel_index = 0                  # Primary BBS channel
+public_channel = 0                 # Broadcast channel
+
+[crypto]
+argon2_time_cost = 3
+argon2_memory_kb = 32768           # 32MB - RPi friendly
+argon2_parallelism = 1
+
+# === FEATURE FLAGS ===
+[features]
+mail_enabled = true
+boards_enabled = true
+sync_enabled = true
+registration_enabled = true
+
+# === OPERATING MODE ===
+[operating_mode]
+# Options: "full" | "mail_only" | "boards_only" | "repeater"
+mode = "full"
+
+[repeater]
+forward_mail = true
+forward_bulletins = true
+forward_to_peers = []              # Empty = all known peers
+announce_enabled = true
+announce_message = "advBBS Relay active. SM <user> <msg> to send mail."
+announce_interval_hours = 12
+announce_channel = 0
+
+# === SYNC SETTINGS ===
+[sync]
+enabled = true
+auto_sync_interval_minutes = 60
+
+# Add peers here - example configurations:
+# [[sync.peers]]
+# node_id = "!abc12345"
+# name = "Remote-BBS-1"
+# protocol = "fq51"                # fq51 | tc2 | meshing-around
+
+bulletin_sync_interval_minutes = 60
+mail_delivery_mode = "instant"     # instant | batched
+mail_batch_interval_minutes = 5
+mail_retry_attempts = 3
+mail_ack_timeout_seconds = 30
+mail_retry_backoff_base = 60
+mail_max_hops = 3
+participate_in_mail_relay = true
+participate_in_bulletin_sync = true
+
+# === ADMIN CHANNEL ===
+[admin_channel]
+enabled = false                    # Enable for multi-BBS admin sync
+channel_index = 7
+sync_bans = true
+sync_peer_status = true
+trusted_peers = []                 # Add trusted admin node IDs
+require_mutual_trust = true
+
+[rate_limits]
+messages_per_minute = 10
+sync_messages_per_minute = 20
+commands_per_minute = 30
+
+# === WEB READER (Optional) ===
+[web_reader]
+enabled = false
+host = "0.0.0.0"                   # Bind to all interfaces in Docker
+port = 8080
+use_bbs_auth = true
+session_timeout_minutes = 30
+max_failed_logins = 5
+lockout_minutes = 15
+requests_per_minute = 60
+login_attempts_per_minute = 5
+allow_board_browsing = true
+allow_mail_reading = true
+allow_user_list = false
+show_node_status = true
+terminal_style = true
+motd_on_login = true
+
+# === CLI CONFIGURATION ===
+[cli_config]
+enabled = true
+require_admin = true
+auto_apply = false
+backup_on_change = true
+color_output = true
+menu_timeout_minutes = 30
+
+[logging]
+level = "INFO"                     # DEBUG | INFO | WARNING | ERROR
+file = "/var/log/advbbs.log"
+max_size_mb = 10
+backup_count = 3
