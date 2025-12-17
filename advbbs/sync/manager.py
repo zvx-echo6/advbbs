@@ -1,5 +1,5 @@
 """
-advBBS Sync Manager
+FQ51BBS Sync Manager
 
 Coordinates inter-BBS synchronization using FQ51 native protocol.
 """
@@ -13,7 +13,7 @@ from ..config import SyncConfig
 from .compat.fq51_native import FQ51NativeSync
 
 if TYPE_CHECKING:
-    from ..core.bbs import advBBS
+    from ..core.bbs import FQ51BBS
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class SyncManager:
     - Only syncs general and help boards
     """
 
-    def __init__(self, config: SyncConfig, db, mesh, bbs: Optional["advBBS"] = None):
+    def __init__(self, config: SyncConfig, db, mesh, bbs: Optional["FQ51BBS"] = None):
         """
         Initialize sync manager.
 
@@ -39,7 +39,7 @@ class SyncManager:
             config: Sync configuration
             db: Database instance
             mesh: Mesh interface instance
-            bbs: advBBS instance (for encryption operations)
+            bbs: FQ51BBS instance (for encryption operations)
         """
         self.config = config
         self.db = db
@@ -59,9 +59,14 @@ class SyncManager:
         self._incoming_remote_mail = {}  # uuid -> {from/to info, received_parts}
         self._relay_mail = {}  # uuid -> {origin_node, dest_node}
 
-        # MAILREQ retry configuration
+        # MAILREQ retry configuration (from config)
         self._mailreq_retry_intervals = [30, 60, 90]  # seconds between retries
-        self._mailreq_max_attempts = 3
+        self._mailreq_max_attempts = config.mail_retry_attempts
+
+        # MAILDAT/MAILDLV retry configuration (from config)
+        self._maildat_retry_interval = config.maildlv_retry_interval_seconds
+        self._maildat_max_attempts = config.maildlv_max_attempts
+        self._maildat_timeout = config.maildlv_timeout_seconds
 
         # Protocol handler
         self._fq51 = FQ51NativeSync(self)
@@ -124,6 +129,9 @@ class SyncManager:
         # Retry pending MAILREQ messages
         await self._retry_pending_mailreq()
 
+        # Retry pending MAILDAT chunks (waiting for MAILDLV)
+        await self._retry_pending_maildat()
+
         # Clean up stale pending ACKs
         await self._cleanup_pending_acks()
 
@@ -183,6 +191,10 @@ class SyncManager:
         to_remove = []
 
         for mail_uuid, pending in self._pending_remote_mail.items():
+            # Skip entries that have already sent chunks (waiting for MAILDLV)
+            if pending.get("state") == "chunks_sent":
+                continue
+
             # Skip if not ready for retry
             next_retry = pending.get("next_retry", 0)
             if now < next_retry:
@@ -218,6 +230,69 @@ class SyncManager:
         # Remove failed entries
         for mail_uuid in to_remove:
             del self._pending_remote_mail[mail_uuid]
+
+    async def _retry_pending_maildat(self):
+        """Retry pending MAILDAT messages that haven't received MAILDLV."""
+        now = time.time()
+        to_remove = []
+
+        for mail_uuid, pending in self._pending_remote_mail.items():
+            # Only process entries that have sent chunks (state = "chunks_sent")
+            if pending.get("state") != "chunks_sent":
+                continue
+
+            # Check total timeout (give up after 5 minutes)
+            if now - pending.get("chunks_sent_at", now) > self._maildat_timeout:
+                logger.warning(f"MAILDAT {mail_uuid[:8]} timed out waiting for MAILDLV after {self._maildat_timeout}s")
+                to_remove.append(mail_uuid)
+                self._store_mail_failure(mail_uuid, pending.get("recipient", "unknown"), "TIMEOUT")
+                continue
+
+            # Check if ready for retry
+            next_retry = pending.get("next_retry", 0)
+            if now < next_retry:
+                continue
+
+            chunk_attempts = pending.get("chunk_attempts", 1)
+
+            # Check if we've exceeded max attempts
+            if chunk_attempts >= self._maildat_max_attempts:
+                logger.warning(f"MAILDAT {mail_uuid[:8]} failed after {chunk_attempts} chunk retries, giving up")
+                to_remove.append(mail_uuid)
+                self._store_mail_failure(mail_uuid, pending.get("recipient", "unknown"), "DELIVERY_FAILED")
+                continue
+
+            # Retry sending chunks
+            chunks = pending.get("chunks", [])
+            dest_node = pending["dest_node"]
+
+            logger.info(f"Retrying MAILDAT for {mail_uuid[:8]} to {dest_node} (attempt {chunk_attempts + 1}/{self._maildat_max_attempts})")
+
+            try:
+                # Re-send all chunks
+                await self._send_mail_chunks_retry(mail_uuid, chunks, dest_node)
+                pending["chunk_attempts"] = chunk_attempts + 1
+                pending["next_retry"] = now + self._maildat_retry_interval
+            except Exception as e:
+                logger.error(f"Failed to retry MAILDAT {mail_uuid[:8]}: {e}")
+
+        # Remove failed/timed out entries
+        for mail_uuid in to_remove:
+            del self._pending_remote_mail[mail_uuid]
+
+    async def _send_mail_chunks_retry(self, uuid: str, chunks: list[str], dest_node: str):
+        """Send message body chunks for retry (no state change)."""
+        import random
+        total = len(chunks)
+
+        for i, chunk in enumerate(chunks, 1):
+            maildat = f"MAILDAT|{uuid}|{i}/{total}|{chunk}"
+            await self.mesh.send_dm(maildat, dest_node)
+
+            if i < total:
+                await asyncio.sleep(random.uniform(2.2, 2.6))
+
+        logger.info(f"Retried {total} chunks for {uuid[:8]}")
 
     def handle_sync_message(self, message: str, sender: str) -> bool:
         """
@@ -723,9 +798,15 @@ class SyncManager:
 
         logger.info(f"Sent {total} chunks for {uuid[:8]}")
 
-        # Clean up pending
+        # Update state to "chunks_sent" - waiting for MAILDLV
+        # Don't delete yet - we need to retry if no MAILDLV received
         if uuid in self._pending_remote_mail:
-            del self._pending_remote_mail[uuid]
+            now = time.time()
+            self._pending_remote_mail[uuid]["state"] = "chunks_sent"
+            self._pending_remote_mail[uuid]["chunks_sent_at"] = now
+            self._pending_remote_mail[uuid]["chunk_attempts"] = 1
+            self._pending_remote_mail[uuid]["next_retry"] = now + self._maildat_retry_interval
+            logger.info(f"MAILDAT {uuid[:8]}: Waiting for MAILDLV (will retry in {self._maildat_retry_interval}s if not received)")
 
     def _handle_mailnak(self, message: str, sender: str) -> bool:
         """Handle MAILNAK - delivery rejected."""
@@ -903,6 +984,11 @@ class SyncManager:
                 return True
 
             logger.info(f"MAILDLV {uuid[:8]}: Remote mail successfully delivered to {dest}")
+
+            # Clean up pending mail entry (delivery confirmed, no more retries needed)
+            if uuid in self._pending_remote_mail:
+                del self._pending_remote_mail[uuid]
+                logger.info(f"MAILDLV {uuid[:8]}: Cleared from pending queue")
 
             # Update message status in database
             try:

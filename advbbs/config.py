@@ -1,5 +1,5 @@
 """
-advBBS Configuration Module
+FQ51BBS Configuration Module
 
 Handles loading, validation, and management of configuration settings.
 """
@@ -22,10 +22,10 @@ else:
 @dataclass
 class BBSConfig:
     """BBS general settings."""
-    name: str = "advBBS"
+    name: str = "FQ51BBS"
     callsign: str = "FQ51"
     admin_password: str = "changeme"
-    motd: str = "Welcome to advBBS!"
+    motd: str = "Welcome to FQ51BBS!"
     timezone: str = "America/Boise"  # Timezone for display (e.g., America/New_York, UTC)
     max_message_age_days: int = 30
     announcement_interval_hours: int = 12
@@ -38,7 +38,7 @@ class BBSConfig:
 @dataclass
 class DatabaseConfig:
     """Database settings."""
-    path: str = "/data/advbbs.db"
+    path: str = "/data/fq51bbs.db"
     backup_path: str = "/data/backups"
     backup_interval_hours: int = 24
 
@@ -87,7 +87,7 @@ class RepeaterConfig:
     forward_bulletins: bool = True
     forward_to_peers: list[str] = field(default_factory=list)
     announce_enabled: bool = True
-    announce_message: str = "advBBS Relay active. DM !send <user> <msg> to send mail."
+    announce_message: str = "FQ51BBS Relay active. DM !send <user> <msg> to send mail."
     announce_interval_hours: int = 12
     announce_channel: int = 0
 
@@ -114,6 +114,10 @@ class SyncConfig:
     mail_ack_timeout_seconds: int = 30
     mail_retry_backoff_base: int = 60
     mail_max_hops: int = 3
+    # MAILDLV retry settings (for delivery confirmation)
+    maildlv_retry_interval_seconds: int = 45
+    maildlv_max_attempts: int = 3
+    maildlv_timeout_seconds: int = 300
     participate_in_mail_relay: bool = True
     peers: list[SyncPeer] = field(default_factory=list)
 
@@ -172,7 +176,7 @@ class CLIConfigSettings:
 class LoggingConfig:
     """Logging settings."""
     level: str = "INFO"
-    file: str = "/var/log/advbbs.log"
+    file: str = "/var/log/fq51bbs.log"
     max_size_mb: int = 10
     backup_count: int = 3
     enabled: bool = True  # Added for compatibility
