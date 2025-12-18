@@ -1,8 +1,8 @@
 """
-advBBS Native Sync Protocol
+advBBS Native Sync Protocol (FQ51-compatible)
 
-DM-based sync for advBBS-to-advBBS communication.
-Designed for efficient, secure mesh sync between advBBS instances.
+DM-based sync for advBBS and FQ51BBS inter-BBS communication.
+Designed for efficient, secure mesh sync between advBBS/FQ51BBS instances.
 
 Protocol format: FQ51|<version>|<msg_type>|<payload>
 
@@ -13,6 +13,11 @@ Message types:
 - SYNC_ACK: Acknowledge receipt
 - SYNC_DONE: Signal sync complete
 - DELETE: Delete message by UUID
+
+RAP (Route Announcement Protocol) types:
+- RAP_PING: Lightweight heartbeat probe
+- RAP_PONG: Heartbeat response with reachable routes
+- RAP_ROUTES: Route advertisement (full route table share)
 """
 
 import base64
@@ -44,7 +49,7 @@ class FQ51SyncMessage:
 
 class FQ51NativeSync:
     """
-    Native advBBS-to-advBBS sync via DM.
+    Native advBBS/FQ51BBS sync via DM (FQ51-compatible protocol).
 
     Protocol format: FQ51|<version>|<msg_type>|<payload>
 
@@ -65,8 +70,15 @@ class FQ51NativeSync:
     MSG_SYNC_ACK = "SYNC_ACK"
     MSG_SYNC_DONE = "SYNC_DONE"
     MSG_DELETE = "DELETE"
+    # RAP (Route Announcement Protocol) message types
+    MSG_RAP_PING = "RAP_PING"
+    MSG_RAP_PONG = "RAP_PONG"
+    MSG_RAP_ROUTES = "RAP_ROUTES"
 
-    VALID_TYPES = {MSG_HELLO, MSG_SYNC_REQ, MSG_SYNC_MSG, MSG_SYNC_ACK, MSG_SYNC_DONE, MSG_DELETE}
+    VALID_TYPES = {
+        MSG_HELLO, MSG_SYNC_REQ, MSG_SYNC_MSG, MSG_SYNC_ACK, MSG_SYNC_DONE, MSG_DELETE,
+        MSG_RAP_PING, MSG_RAP_PONG, MSG_RAP_ROUTES,
+    }
 
     def __init__(self, sync_manager: "SyncManager"):
         """
@@ -81,8 +93,13 @@ class FQ51NativeSync:
         self.mesh = sync_manager.mesh
         self.bbs = getattr(sync_manager, 'bbs', None)
 
-        self.my_name = getattr(self.config, 'bbs_name', 'advBBS')
-        self.my_callsign = getattr(self.config, 'callsign', 'FQ51')
+        # Get BBS name and callsign from the full config hierarchy
+        if self.bbs and hasattr(self.bbs, 'config'):
+            self.my_name = self.bbs.config.bbs.name
+            self.my_callsign = self.bbs.config.bbs.callsign
+        else:
+            self.my_name = getattr(self.config, 'bbs_name', 'advBBS')
+            self.my_callsign = getattr(self.config, 'callsign', 'ADV')
 
         # Track pending ACKs: uuid -> (peer_id, timestamp)
         self._pending_acks: dict[str, tuple[str, float]] = {}
@@ -92,7 +109,7 @@ class FQ51NativeSync:
 
     async def sync_with_peer(self, peer_id: str, since_us: int = 0):
         """
-        Initiate sync with advBBS peer.
+        Initiate sync with peer BBS.
 
         Args:
             peer_id: Peer node ID
@@ -185,6 +202,10 @@ class FQ51NativeSync:
             self.MSG_SYNC_ACK: self._handle_sync_ack,
             self.MSG_SYNC_DONE: self._handle_sync_done,
             self.MSG_DELETE: self._handle_delete,
+            # RAP handlers
+            self.MSG_RAP_PING: self._handle_rap_ping,
+            self.MSG_RAP_PONG: self._handle_rap_pong,
+            self.MSG_RAP_ROUTES: self._handle_rap_routes,
         }
 
         handler = handlers.get(msg_type)
@@ -483,3 +504,314 @@ class FQ51NativeSync:
         """Apply rate limiting delay."""
         import asyncio
         await asyncio.sleep(3)  # 1 message per 3 seconds
+
+    # === RAP (Route Announcement Protocol) Methods ===
+
+    async def send_rap_ping(self, peer_id: str):
+        """
+        Send RAP_PING heartbeat to peer.
+
+        Format: FQ51|1|RAP_PING|timestamp_us
+        """
+        timestamp_us = int(time.time() * 1_000_000)
+        ping = self._format_message(self.MSG_RAP_PING, str(timestamp_us))
+        if self.mesh:
+            await self.mesh.send_dm(ping, peer_id)
+            logger.debug(f"Sent RAP_PING to {peer_id}")
+
+    async def send_rap_pong(self, peer_id: str, ping_timestamp_us: int):
+        """
+        Send RAP_PONG response to peer.
+
+        Format: FQ51|1|RAP_PONG|ping_ts|route1;route2;...
+        Each route: bbs_name:hop_count:quality_score
+        """
+        routes = self._get_route_table_string()
+        payload = f"{ping_timestamp_us}|{routes}"
+        pong = self._format_message(self.MSG_RAP_PONG, payload)
+        if self.mesh:
+            await self.mesh.send_dm(pong, peer_id)
+            logger.debug(f"Sent RAP_PONG to {peer_id} with {len(routes.split(';')) if routes else 0} routes")
+
+    async def send_rap_routes(self, peer_id: str):
+        """
+        Send full route table advertisement to peer.
+
+        Format: FQ51|1|RAP_ROUTES|route1;route2;...
+        """
+        routes = self._get_route_table_string()
+        msg = self._format_message(self.MSG_RAP_ROUTES, routes)
+        if self.mesh:
+            await self.mesh.send_dm(msg, peer_id)
+            logger.debug(f"Sent RAP_ROUTES to {peer_id}")
+
+    def _handle_rap_ping(self, payload: str, sender: str):
+        """
+        Handle RAP_PING heartbeat.
+
+        Updates peer health status and sends RAP_PONG response.
+        """
+        try:
+            ping_timestamp_us = int(payload) if payload else 0
+        except ValueError:
+            ping_timestamp_us = 0
+
+        logger.debug(f"Received RAP_PING from {sender}")
+
+        # Update peer health - any message from peer means they're alive
+        self._update_peer_health(sender, "alive")
+
+        # Schedule PONG response on the BBS event loop
+        # (handlers are called from Meshtastic callback thread)
+        self.sync_manager._schedule_async(self.send_rap_pong(sender, ping_timestamp_us))
+
+    def _handle_rap_pong(self, payload: str, sender: str):
+        """
+        Handle RAP_PONG heartbeat response.
+
+        Updates peer health status, calculates RTT, and processes route table.
+        """
+        parts = payload.split("|", 1)
+        try:
+            ping_timestamp_us = int(parts[0]) if parts else 0
+        except ValueError:
+            ping_timestamp_us = 0
+
+        routes_str = parts[1] if len(parts) > 1 else ""
+
+        # Calculate RTT if we have the ping timestamp
+        now_us = int(time.time() * 1_000_000)
+        rtt_ms = (now_us - ping_timestamp_us) / 1000 if ping_timestamp_us else 0
+
+        logger.info(f"Received RAP_PONG from {sender} (RTT: {rtt_ms:.1f}ms)")
+
+        # Update peer health - PONG received means peer is alive
+        self._update_peer_health(sender, "alive", pong_received=True)
+
+        # Process routes advertised by peer
+        if routes_str:
+            self._process_peer_routes(sender, routes_str)
+
+    def _handle_rap_routes(self, payload: str, sender: str):
+        """
+        Handle RAP_ROUTES route advertisement.
+
+        Updates route table with routes from peer.
+        """
+        logger.debug(f"Received RAP_ROUTES from {sender}")
+
+        # Update peer health - any message means alive
+        self._update_peer_health(sender, "alive")
+
+        # Process routes
+        if payload:
+            self._process_peer_routes(sender, payload)
+
+    def _get_route_table_string(self) -> str:
+        """
+        Get route table as string for RAP messages.
+
+        Format: bbs1:hop:quality;bbs2:hop:quality;...
+        Includes self as hop 0 and direct peers as hop 1.
+        """
+        routes = []
+
+        # Add self as hop 0
+        routes.append(f"{self.my_callsign}:0:1.0")
+
+        # Add direct peers as hop 1
+        # Use callsign if set, otherwise fall back to name
+        peer_rows = self.db.fetchall("""
+            SELECT COALESCE(callsign, name), quality_score
+            FROM bbs_peers
+            WHERE (callsign IS NOT NULL OR name IS NOT NULL)
+              AND health_status IN ('unknown', 'alive')
+              AND sync_enabled = 1
+        """)
+
+        for peer in peer_rows:
+            callsign = peer[0]
+            quality = peer[1] if peer[1] is not None else 1.0
+            routes.append(f"{callsign}:1:{quality:.2f}")
+
+        # Add learned routes (hop >= 2)
+        now_us = int(time.time() * 1_000_000)
+        route_rows = self.db.fetchall("""
+            SELECT r.dest_bbs, r.hop_count, r.quality_score
+            FROM rap_routes r
+            WHERE r.expires_at_us > ?
+            ORDER BY r.hop_count ASC
+        """, (now_us,))
+
+        for route in route_rows:
+            dest_bbs = route[0]
+            hop_count = route[1]
+            quality = route[2] if route[2] is not None else 1.0
+            # Don't include if already in direct peers
+            if not any(r.startswith(f"{dest_bbs}:") for r in routes):
+                routes.append(f"{dest_bbs}:{hop_count}:{quality:.2f}")
+
+        return ";".join(routes)
+
+    def _process_peer_routes(self, sender: str, routes_str: str):
+        """
+        Process routes received from peer.
+
+        Updates rap_routes table with new/better routes.
+        """
+        if not routes_str:
+            return
+
+        now_us = int(time.time() * 1_000_000)
+
+        # Get peer ID
+        peer_row = self.db.fetchone(
+            "SELECT id FROM bbs_peers WHERE node_id = ?",
+            (sender,)
+        )
+        if not peer_row:
+            logger.warning(f"Unknown peer {sender} in route processing")
+            return
+
+        peer_id = peer_row[0]
+
+        # Get route expiry from config (default 1 hour)
+        expiry_seconds = 3600
+        if hasattr(self.sync_manager, 'sync_config'):
+            expiry_seconds = getattr(self.sync_manager.sync_config, 'rap_route_expiry_seconds', 3600)
+        expires_at_us = now_us + (expiry_seconds * 1_000_000)
+
+        routes = routes_str.split(";")
+        for route in routes:
+            if not route:
+                continue
+
+            parts = route.split(":")
+            if len(parts) < 2:
+                continue
+
+            dest_bbs = parts[0]
+            try:
+                hop_count = int(parts[1]) + 1  # Add 1 for the hop through this peer
+            except ValueError:
+                continue
+
+            try:
+                quality = float(parts[2]) if len(parts) > 2 else 1.0
+                quality = min(1.0, max(0.0, quality))  # Clamp to 0-1
+            except ValueError:
+                quality = 1.0
+
+            # Skip if it's our own BBS
+            if dest_bbs.upper() == self.my_callsign.upper():
+                continue
+
+            # Skip if hop count too high (max 5)
+            max_hops = 5
+            if hasattr(self.sync_manager, 'sync_config'):
+                max_hops = getattr(self.sync_manager.sync_config, 'mail_max_hops', 5)
+            if hop_count > max_hops:
+                continue
+
+            # Insert or update route
+            self.db.execute("""
+                INSERT INTO rap_routes (dest_bbs, via_peer_id, hop_count, quality_score, last_updated_us, expires_at_us)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dest_bbs, via_peer_id) DO UPDATE SET
+                    hop_count = CASE WHEN excluded.hop_count < rap_routes.hop_count THEN excluded.hop_count ELSE rap_routes.hop_count END,
+                    quality_score = excluded.quality_score,
+                    last_updated_us = excluded.last_updated_us,
+                    expires_at_us = excluded.expires_at_us
+            """, (dest_bbs, peer_id, hop_count, quality, now_us, expires_at_us))
+
+        logger.debug(f"Processed {len(routes)} routes from {sender}")
+
+    def _update_peer_health(self, node_id: str, new_status: str, pong_received: bool = False):
+        """
+        Update peer health status.
+
+        State machine:
+        - unknown -> alive (on PONG)
+        - alive -> unreachable (on 2 failed pings)
+        - unreachable -> dead (on 5 total fails)
+        - dead -> alive (on any message)
+        - * -> alive (on PONG)
+        """
+        now_us = int(time.time() * 1_000_000)
+
+        peer_row = self.db.fetchone(
+            "SELECT id, health_status, failed_heartbeats FROM bbs_peers WHERE node_id = ?",
+            (node_id,)
+        )
+
+        if not peer_row:
+            # Create peer entry if doesn't exist
+            self.db.execute("""
+                INSERT INTO bbs_peers (node_id, protocol, health_status, last_seen_us)
+                VALUES (?, 'fq51', ?, ?)
+            """, (node_id, new_status, now_us))
+            logger.info(f"Peer {node_id} registered with status: {new_status}")
+            return
+
+        peer_id = peer_row[0]
+        old_status = peer_row[1] or "unknown"
+
+        # Update status and reset failed heartbeats on alive
+        if new_status == "alive":
+            updates = {
+                "health_status": "alive",
+                "failed_heartbeats": 0,
+                "last_seen_us": now_us,
+            }
+            if pong_received:
+                updates["last_pong_us"] = now_us
+
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            values = list(updates.values()) + [peer_id]
+            self.db.execute(
+                f"UPDATE bbs_peers SET {set_clause} WHERE id = ?",
+                tuple(values)
+            )
+
+            # State transition callback
+            if old_status != "alive":
+                self._on_peer_state_change(node_id, old_status, "alive")
+
+        logger.debug(f"Peer {node_id} health: {old_status} -> {new_status}")
+
+    def _on_peer_state_change(self, node_id: str, old_state: str, new_state: str):
+        """
+        Handle peer state transitions.
+
+        When peer comes online (alive), trigger pending mail retry.
+        When peer goes dead, expire routes through that peer.
+        """
+        if new_state == "alive" and old_state in ("unknown", "unreachable", "dead"):
+            # Route came online - trigger mail retry via sync manager
+            logger.info(f"Peer {node_id} came online ({old_state} -> alive), triggering pending mail retry")
+            if hasattr(self.sync_manager, '_retry_pending_mail_for_peer'):
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(self.sync_manager._retry_pending_mail_for_peer(node_id))
+                except Exception as e:
+                    logger.error(f"Failed to trigger pending mail retry: {e}")
+
+        elif new_state == "dead":
+            # Invalidate routes through this peer
+            logger.info(f"Peer {node_id} is dead, expiring routes via this peer")
+            self._expire_routes_via_peer(node_id)
+
+    def _expire_routes_via_peer(self, node_id: str):
+        """Expire all routes that go through a specific peer."""
+        peer_row = self.db.fetchone(
+            "SELECT id FROM bbs_peers WHERE node_id = ?",
+            (node_id,)
+        )
+        if peer_row:
+            self.db.execute(
+                "DELETE FROM rap_routes WHERE via_peer_id = ?",
+                (peer_row[0],)
+            )
+            logger.info(f"Expired routes via peer {node_id}")

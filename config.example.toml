@@ -1,18 +1,18 @@
-# FQ51BBS Configuration File
+# advBBS Configuration File
 # Copy to config.toml and modify as needed
 #
 # For Docker: mount as /app/config.toml
 
 [bbs]
-name = "FQ51BBS"
-callsign = "FQ51"
+name = "advBBS"
+callsign = "ADV"
 admin_password = "CHANGE_ME"       # REQUIRED: Change this!
-motd = "Welcome to FQ51BBS!"
+motd = "Welcome to advBBS!"
 max_message_age_days = 30
 announcement_interval_hours = 12   # 0 to disable
 
 [database]
-path = "/data/fq51bbs.db"          # Docker volume path
+path = "/data/advbbs.db"           # Docker volume path
 backup_path = "/data/backups"
 backup_interval_hours = 24
 
@@ -46,7 +46,7 @@ forward_mail = true
 forward_bulletins = true
 forward_to_peers = []              # Empty = all known peers
 announce_enabled = true
-announce_message = "FQ51BBS Relay active. SM <user> <msg> to send mail."
+announce_message = "advBBS Relay active. SM <user> <msg> to send mail."
 announce_interval_hours = 12
 announce_channel = 0
 
@@ -74,6 +74,15 @@ maildlv_max_attempts = 3              # Max attempts before giving up
 maildlv_timeout_seconds = 300         # Total timeout waiting for MAILDLV (5 min)
 participate_in_mail_relay = true
 participate_in_bulletin_sync = true
+
+# RAP (Route Announcement Protocol) settings - conservative defaults for low-bandwidth mesh
+rap_enabled = true
+rap_heartbeat_interval_seconds = 43200   # 12 hours
+rap_heartbeat_timeout_seconds = 60       # Wait for PONG response
+rap_unreachable_threshold = 2            # Failed pings before UNREACHABLE
+rap_dead_threshold = 5                   # Failed pings before DEAD
+rap_route_expiry_seconds = 129600        # 36 hours (3 missed heartbeats)
+rap_route_share_interval_seconds = 86400 # 24 hours
 
 # === ADMIN CHANNEL ===
 [admin_channel]
@@ -118,6 +127,6 @@ menu_timeout_minutes = 30
 
 [logging]
 level = "INFO"                     # DEBUG | INFO | WARNING | ERROR
-file = "/var/log/fq51bbs.log"
+file = "/var/log/advbbs.log"
 max_size_mb = 10
 backup_count = 3

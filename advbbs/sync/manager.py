@@ -1,7 +1,7 @@
 """
-FQ51BBS Sync Manager
+advBBS Sync Manager
 
-Coordinates inter-BBS synchronization using FQ51 native protocol.
+Coordinates inter-BBS synchronization using FQ51-compatible native protocol.
 """
 
 import asyncio
@@ -13,7 +13,7 @@ from ..config import SyncConfig
 from .compat.fq51_native import FQ51NativeSync
 
 if TYPE_CHECKING:
-    from ..core.bbs import FQ51BBS
+    from ..core.bbs import advBBS
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class SyncManager:
     - Only syncs general and help boards
     """
 
-    def __init__(self, config: SyncConfig, db, mesh, bbs: Optional["FQ51BBS"] = None):
+    def __init__(self, config: SyncConfig, db, mesh, bbs: Optional["advBBS"] = None):
         """
         Initialize sync manager.
 
@@ -39,7 +39,7 @@ class SyncManager:
             config: Sync configuration
             db: Database instance
             mesh: Mesh interface instance
-            bbs: FQ51BBS instance (for encryption operations)
+            bbs: advBBS instance (for encryption operations)
         """
         self.config = config
         self.db = db
@@ -68,13 +68,52 @@ class SyncManager:
         self._maildat_max_attempts = config.maildlv_max_attempts
         self._maildat_timeout = config.maildlv_timeout_seconds
 
+        # MAILDLV awaiting state - track sent mail waiting for delivery confirmation
+        self._awaiting_maildlv = {}  # uuid -> {dest_node, chunks, timestamp, attempts, next_retry}
+        self._maildlv_retry_intervals = [60, 120, 180]  # seconds between retries (longer than MAILREQ)
+        self._maildlv_max_attempts = 3
+
         # Protocol handler
         self._fq51 = FQ51NativeSync(self)
 
         # Protocol response delay (avoid TX queue collision)
         self._protocol_delay = 2.5
 
+        # RAP (Route Announcement Protocol) state
+        self._last_heartbeat_time = 0
+        self._last_route_share_time = 0
+        self._pending_pings = {}  # node_id -> timestamp
+
+        # Store sync config reference for RAP settings
+        self.sync_config = config
+
+        # Sync configured peers to database
+        self._sync_peers_to_db()
+
         logger.info(f"SyncManager initialized with {len(self._peers)} peers")
+
+    def _sync_peers_to_db(self):
+        """
+        Ensure all configured peers exist in the database.
+        Uses peer name as callsign since config doesn't have separate callsign field.
+        """
+        for peer in self._peers.values():
+            existing = self.db.fetchone(
+                "SELECT id FROM bbs_peers WHERE node_id = ?",
+                (peer.node_id,)
+            )
+            if not existing:
+                self.db.execute("""
+                    INSERT INTO bbs_peers (node_id, name, callsign, protocol, sync_enabled)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (peer.node_id, peer.name, peer.name, peer.protocol, 1 if peer.enabled else 0))
+            else:
+                # Update existing peer with config values
+                self.db.execute("""
+                    UPDATE bbs_peers
+                    SET name = ?, callsign = COALESCE(callsign, ?), protocol = ?, sync_enabled = ?
+                    WHERE node_id = ?
+                """, (peer.name, peer.name, peer.protocol, 1 if peer.enabled else 0, peer.node_id))
 
     def _schedule_async(self, coro):
         """
@@ -126,14 +165,66 @@ class SyncManager:
         # Process pending sync operations
         await self._process_pending()
 
-        # Retry pending MAILREQ messages
+        # Retry pending MAILREQ messages (waiting for MAILACK)
         await self._retry_pending_mailreq()
 
-        # Retry pending MAILDAT chunks (waiting for MAILDLV)
-        await self._retry_pending_maildat()
+        # Retry pending MAILDLV confirmations (waiting for delivery confirmation)
+        await self._retry_pending_maildlv()
+
+        # Clean up stale incoming mail (incomplete chunk reception)
+        await self._cleanup_stale_incoming()
 
         # Clean up stale pending ACKs
         await self._cleanup_pending_acks()
+
+        # === RAP (Route Announcement Protocol) ===
+        if getattr(self.config, 'rap_enabled', True):
+            now = time.time()
+
+            # Send heartbeat pings
+            heartbeat_interval = getattr(self.config, 'rap_heartbeat_interval_seconds', 300)
+            if now - self._last_heartbeat_time > heartbeat_interval:
+                await self._send_rap_heartbeats()
+                self._last_heartbeat_time = now
+
+            # Check for heartbeat timeouts
+            await self._check_heartbeat_timeouts()
+
+            # Share route table periodically
+            route_share_interval = getattr(self.config, 'rap_route_share_interval_seconds', 900)
+            if now - self._last_route_share_time > route_share_interval:
+                await self._share_route_table()
+                self._last_route_share_time = now
+
+            # Cleanup expired routes and pending mail
+            await self._cleanup_expired_routes()
+            await self._cleanup_expired_pending_mail()
+
+    async def _sync_bulletins(self):
+        """Sync bulletins with all peers."""
+        async with self._sync_lock:
+            logger.info("Starting scheduled bulletin sync...")
+
+            for node_id, peer in self._peers.items():
+                if not peer.protocol:
+                    continue
+
+                try:
+                    await self._sync_with_peer(node_id, peer.protocol)
+                except Exception as e:
+                    logger.error(f"Error syncing with {peer.name}: {e}")
+
+            logger.info("Scheduled bulletin sync complete")
+
+    async def _sync_with_peer(self, node_id: str, protocol: str):
+        """Sync with a specific peer using FQ51 protocol."""
+        logger.debug(f"Syncing with {node_id}")
+
+        # Get last sync timestamp for this peer
+        since_us = self._get_last_sync_time(node_id)
+
+        # Only FQ51 native protocol is supported
+        await self._fq51.sync_bulletins_to_peer(node_id, since_us)
 
     def _get_last_sync_time(self, node_id: str) -> int:
         """Get last sync timestamp for peer in microseconds."""
@@ -231,68 +322,111 @@ class SyncManager:
         for mail_uuid in to_remove:
             del self._pending_remote_mail[mail_uuid]
 
-    async def _retry_pending_maildat(self):
-        """Retry pending MAILDAT messages that haven't received MAILDLV."""
+    async def _retry_pending_maildlv(self):
+        """Retry sending MAILDAT chunks if MAILDLV not received."""
         now = time.time()
         to_remove = []
 
-        for mail_uuid, pending in self._pending_remote_mail.items():
-            # Only process entries that have sent chunks (state = "chunks_sent")
-            if pending.get("state") != "chunks_sent":
-                continue
-
-            # Check total timeout (give up after 5 minutes)
-            if now - pending.get("chunks_sent_at", now) > self._maildat_timeout:
-                logger.warning(f"MAILDAT {mail_uuid[:8]} timed out waiting for MAILDLV after {self._maildat_timeout}s")
-                to_remove.append(mail_uuid)
-                self._store_mail_failure(mail_uuid, pending.get("recipient", "unknown"), "TIMEOUT")
-                continue
-
-            # Check if ready for retry
-            next_retry = pending.get("next_retry", 0)
+        for mail_uuid, awaiting in list(self._awaiting_maildlv.items()):
+            # Skip if not ready for retry
+            next_retry = awaiting.get("next_retry", 0)
             if now < next_retry:
                 continue
 
-            chunk_attempts = pending.get("chunk_attempts", 1)
+            attempts = awaiting.get("attempts", 1)
+            chunks = awaiting.get("chunks", [])
+            dest_node = awaiting.get("dest_node")
+            failed_chunks = awaiting.get("failed_chunks", [])
 
             # Check if we've exceeded max attempts
-            if chunk_attempts >= self._maildat_max_attempts:
-                logger.warning(f"MAILDAT {mail_uuid[:8]} failed after {chunk_attempts} chunk retries, giving up")
+            if attempts >= self._maildlv_max_attempts:
+                logger.warning(f"MAILDLV {mail_uuid[:8]} not received after {attempts} attempts, giving up")
                 to_remove.append(mail_uuid)
-                self._store_mail_failure(mail_uuid, pending.get("recipient", "unknown"), "DELIVERY_FAILED")
+                # Mark as failed in database
+                self._store_mail_failure(mail_uuid, f"to {dest_node}", "NO_DLV_CONFIRM")
                 continue
 
-            # Retry sending chunks
-            chunks = pending.get("chunks", [])
-            dest_node = pending["dest_node"]
-
-            logger.info(f"Retrying MAILDAT for {mail_uuid[:8]} to {dest_node} (attempt {chunk_attempts + 1}/{self._maildat_max_attempts})")
-
+            # Resend chunks - prioritize failed chunks, but resend all if no MAILDLV
             try:
-                # Re-send all chunks
-                await self._send_mail_chunks_retry(mail_uuid, chunks, dest_node)
-                pending["chunk_attempts"] = chunk_attempts + 1
-                pending["next_retry"] = now + self._maildat_retry_interval
+                if failed_chunks:
+                    logger.info(f"Retrying {len(failed_chunks)} failed MAILDAT chunk(s) for {mail_uuid[:8]} to {dest_node} (attempt {attempts + 1}/{self._maildlv_max_attempts})")
+                    new_failed = await self._resend_mail_chunks(mail_uuid, chunks, dest_node, failed_only=failed_chunks)
+                else:
+                    logger.info(f"Retrying all MAILDAT chunks for {mail_uuid[:8]} to {dest_node} - no MAILDLV received (attempt {attempts + 1}/{self._maildlv_max_attempts})")
+                    new_failed = await self._resend_mail_chunks(mail_uuid, chunks, dest_node)
+
+                awaiting["failed_chunks"] = new_failed
+                awaiting["attempts"] = attempts + 1
+                # Calculate next retry interval
+                retry_idx = min(attempts, len(self._maildlv_retry_intervals) - 1)
+                awaiting["next_retry"] = now + self._maildlv_retry_intervals[retry_idx]
+
             except Exception as e:
                 logger.error(f"Failed to retry MAILDAT {mail_uuid[:8]}: {e}")
 
-        # Remove failed/timed out entries
+        # Remove failed/completed entries
         for mail_uuid in to_remove:
-            del self._pending_remote_mail[mail_uuid]
+            del self._awaiting_maildlv[mail_uuid]
 
-    async def _send_mail_chunks_retry(self, uuid: str, chunks: list[str], dest_node: str):
-        """Send message body chunks for retry (no state change)."""
+    async def _resend_mail_chunks(self, uuid: str, chunks: list[str], dest_node: str, failed_only: list[int] = None):
+        """Resend message body chunks with ACK-based retry."""
         import random
         total = len(chunks)
+        max_chunk_retries = 2  # Fewer retries on resend
 
-        for i, chunk in enumerate(chunks, 1):
+        # Determine which chunks to send
+        if failed_only:
+            indices_to_send = failed_only
+        else:
+            indices_to_send = list(range(1, total + 1))
+
+        new_failed = []
+
+        for i in indices_to_send:
+            chunk = chunks[i - 1]  # Convert 1-indexed to 0-indexed
             maildat = f"MAILDAT|{uuid}|{i}/{total}|{chunk}"
-            await self.mesh.send_dm(maildat, dest_node)
 
-            if i < total:
-                await asyncio.sleep(random.uniform(2.2, 2.6))
+            success = False
+            for attempt in range(max_chunk_retries):
+                acked, error = await self.mesh.send_dm_wait_ack(maildat, dest_node, timeout=30.0)
+                if acked:
+                    logger.debug(f"MAILDAT {uuid[:8]} chunk {i}/{total} ACKed (resend)")
+                    success = True
+                    break
+                else:
+                    logger.warning(f"MAILDAT {uuid[:8]} chunk {i}/{total} resend failed: {error}")
+                    if attempt < max_chunk_retries - 1:
+                        await asyncio.sleep(random.uniform(3.0, 5.0))
 
-        logger.info(f"Retried {total} chunks for {uuid[:8]}")
+            if not success:
+                new_failed.append(i)
+
+            # Delay between chunks
+            await asyncio.sleep(random.uniform(2.2, 2.6))
+
+        if new_failed:
+            logger.warning(f"Resent chunks for {uuid[:8]}, {len(new_failed)} still failed: {new_failed}")
+        else:
+            logger.info(f"Resent {len(indices_to_send)} chunk(s) for {uuid[:8]}, all ACKed")
+
+        return new_failed
+
+    async def _cleanup_stale_incoming(self):
+        """Clean up incomplete incoming mail that timed out."""
+        now = time.time()
+        timeout = 300  # 5 minutes to receive all chunks
+        to_remove = []
+
+        for mail_uuid, incoming in self._incoming_remote_mail.items():
+            timestamp = incoming.get("timestamp", 0)
+            if now - timestamp > timeout:
+                received = len(incoming.get("received_parts", {}))
+                expected = incoming.get("num_parts", 0)
+                logger.warning(f"Incoming mail {mail_uuid[:8]} timed out: received {received}/{expected} chunks")
+                to_remove.append(mail_uuid)
+
+        for mail_uuid in to_remove:
+            del self._incoming_remote_mail[mail_uuid]
 
     def handle_sync_message(self, message: str, sender: str) -> bool:
         """
@@ -789,9 +923,15 @@ class SyncManager:
             return False
 
     async def _send_mail_chunks(self, uuid: str, chunks: list[str], dest_node: str):
-        """Send message body chunks with delays."""
+        """Send message body chunks with ACK-based retry per chunk."""
         import random
         total = len(chunks)
+        max_chunk_retries = 3
+
+        # Initial delay to avoid TX queue collision after MAILACK
+        await asyncio.sleep(self._protocol_delay)
+
+        failed_chunks = []
 
         # Initial delay to avoid TX queue collision after MAILACK
         await asyncio.sleep(self._protocol_delay)
@@ -799,16 +939,45 @@ class SyncManager:
         for i, chunk in enumerate(chunks, 1):
             # Format: MAILDAT|uuid|part/total|data
             maildat = f"MAILDAT|{uuid}|{i}/{total}|{chunk}"
-            await self.mesh.send_dm(maildat, dest_node)
+
+            # Try sending with ACK, retry on failure
+            success = False
+            for attempt in range(max_chunk_retries):
+                acked, error = await self.mesh.send_dm_wait_ack(maildat, dest_node, timeout=30.0)
+                if acked:
+                    logger.debug(f"MAILDAT {uuid[:8]} chunk {i}/{total} ACKed")
+                    success = True
+                    break
+                else:
+                    logger.warning(f"MAILDAT {uuid[:8]} chunk {i}/{total} failed: {error} (attempt {attempt + 1}/{max_chunk_retries})")
+                    if attempt < max_chunk_retries - 1:
+                        await asyncio.sleep(random.uniform(3.0, 5.0))
+
+            if not success:
+                failed_chunks.append(i)
+                logger.error(f"MAILDAT {uuid[:8]} chunk {i}/{total} failed after {max_chunk_retries} attempts")
 
             if i < total:
                 # Delay between chunks
                 await asyncio.sleep(random.uniform(2.2, 2.6))
 
-        logger.info(f"Sent {total} chunks for {uuid[:8]}")
+        if failed_chunks:
+            logger.error(f"MAILDAT {uuid[:8]}: {len(failed_chunks)} chunk(s) failed to send: {failed_chunks}")
+        else:
+            logger.info(f"Sent {total} chunks for {uuid[:8]}, all ACKed, awaiting MAILDLV")
 
-        # Update state to "chunks_sent" - waiting for MAILDLV
-        # Don't delete yet - we need to retry if no MAILDLV received
+        # Move from pending_remote_mail to awaiting_maildlv
+        now = time.time()
+        self._awaiting_maildlv[uuid] = {
+            "dest_node": dest_node,
+            "chunks": chunks,
+            "failed_chunks": failed_chunks,
+            "timestamp": now,
+            "attempts": 1,
+            "next_retry": now + self._maildlv_retry_intervals[0],
+        }
+
+        # Clean up pending MAILREQ state
         if uuid in self._pending_remote_mail:
             now = time.time()
             self._pending_remote_mail[uuid]["state"] = "chunks_sent"
@@ -994,10 +1163,10 @@ class SyncManager:
 
             logger.info(f"MAILDLV {uuid[:8]}: Remote mail successfully delivered to {dest}")
 
-            # Clean up pending mail entry (delivery confirmed, no more retries needed)
-            if uuid in self._pending_remote_mail:
-                del self._pending_remote_mail[uuid]
-                logger.info(f"MAILDLV {uuid[:8]}: Cleared from pending queue")
+            # Clean up awaiting state - delivery confirmed, no more retries needed
+            if uuid in self._awaiting_maildlv:
+                del self._awaiting_maildlv[uuid]
+                logger.debug(f"MAILDLV {uuid[:8]}: Cleared awaiting state")
 
             # Update message status in database
             try:
@@ -1014,3 +1183,302 @@ class SyncManager:
             import traceback
             logger.error(traceback.format_exc())
             return False
+
+    # === RAP (Route Announcement Protocol) Methods ===
+
+    async def _send_rap_heartbeats(self):
+        """Send RAP_PING heartbeats to all peers."""
+        logger.debug("Sending RAP heartbeat pings to peers")
+
+        now = time.time()
+        for node_id, peer in self._peers.items():
+            if not peer.enabled:
+                continue
+
+            try:
+                await self._fq51.send_rap_ping(node_id)
+                self._pending_pings[node_id] = now
+            except Exception as e:
+                logger.error(f"Failed to send RAP_PING to {node_id}: {e}")
+
+    async def _check_heartbeat_timeouts(self):
+        """Check for peers that didn't respond to heartbeats."""
+        now = time.time()
+        timeout = getattr(self.config, 'rap_heartbeat_timeout_seconds', 30)
+        unreachable_threshold = getattr(self.config, 'rap_unreachable_threshold', 2)
+        dead_threshold = getattr(self.config, 'rap_dead_threshold', 5)
+
+        for node_id in list(self._pending_pings.keys()):
+            ping_time = self._pending_pings.get(node_id, 0)
+            if now - ping_time > timeout:
+                # Ping timed out - increment failed heartbeats
+                del self._pending_pings[node_id]
+
+                peer_row = self.db.fetchone(
+                    "SELECT id, health_status, failed_heartbeats FROM bbs_peers WHERE node_id = ?",
+                    (node_id,)
+                )
+                if not peer_row:
+                    continue
+
+                peer_id = peer_row[0]
+                current_status = peer_row[1] or "unknown"
+                failed = (peer_row[2] or 0) + 1
+
+                # Determine new status based on failure count
+                if failed >= dead_threshold:
+                    new_status = "dead"
+                elif failed >= unreachable_threshold:
+                    new_status = "unreachable"
+                else:
+                    new_status = current_status
+
+                # Update database
+                self.db.execute(
+                    "UPDATE bbs_peers SET failed_heartbeats = ?, health_status = ? WHERE id = ?",
+                    (failed, new_status, peer_id)
+                )
+
+                # Trigger state change callback if status changed
+                if new_status != current_status:
+                    logger.warning(f"Peer {node_id} health: {current_status} -> {new_status} (failed={failed})")
+                    self._fq51._on_peer_state_change(node_id, current_status, new_status)
+
+    async def _share_route_table(self):
+        """Share full route table with all peers."""
+        logger.debug("Sharing route table with peers")
+
+        for node_id, peer in self._peers.items():
+            if not peer.enabled:
+                continue
+
+            try:
+                await self._fq51.send_rap_routes(node_id)
+            except Exception as e:
+                logger.error(f"Failed to send RAP_ROUTES to {node_id}: {e}")
+
+    async def _cleanup_expired_routes(self):
+        """Remove expired routes from database."""
+        now_us = int(time.time() * 1_000_000)
+        result = self.db.execute(
+            "DELETE FROM rap_routes WHERE expires_at_us < ?",
+            (now_us,)
+        )
+        if result.rowcount > 0:
+            logger.debug(f"Cleaned up {result.rowcount} expired routes")
+
+    async def _cleanup_expired_pending_mail(self):
+        """Remove expired pending mail from database."""
+        now_us = int(time.time() * 1_000_000)
+        expired = self.db.fetchall(
+            "SELECT mail_uuid, recipient_bbs, sender_user_id FROM rap_pending_mail WHERE expires_at_us < ?",
+            (now_us,)
+        )
+
+        for row in expired:
+            mail_uuid = row[0]
+            recipient_bbs = row[1]
+            sender_user_id = row[2]
+
+            logger.warning(f"Pending mail {mail_uuid[:8]} to {recipient_bbs} expired")
+
+            # Send notification to sender
+            await self._send_queued_mail_notification(sender_user_id, recipient_bbs, "expired")
+
+            # Delete from pending
+            self.db.execute(
+                "DELETE FROM rap_pending_mail WHERE mail_uuid = ?",
+                (mail_uuid,)
+            )
+
+    async def _retry_pending_mail_for_peer(self, peer_node_id: str):
+        """
+        Retry all pending mail that can now be delivered via this peer.
+
+        Called when a peer comes online (state changes to 'alive').
+        """
+        # Get peer's BBS name
+        peer_row = self.db.fetchone(
+            "SELECT id, callsign, name FROM bbs_peers WHERE node_id = ?",
+            (peer_node_id,)
+        )
+        if not peer_row:
+            return
+
+        peer_id = peer_row[0]
+        peer_callsign = peer_row[1] or peer_row[2] or ""
+
+        # Get destinations reachable via this peer
+        now_us = int(time.time() * 1_000_000)
+        reachable = {peer_callsign.upper()} if peer_callsign else set()
+
+        # Add destinations from route table via this peer
+        routes = self.db.fetchall(
+            "SELECT dest_bbs FROM rap_routes WHERE via_peer_id = ? AND expires_at_us > ?",
+            (peer_id, now_us)
+        )
+        for route in routes:
+            reachable.add(route[0].upper())
+
+        if not reachable:
+            return
+
+        logger.info(f"Peer {peer_node_id} online, checking pending mail for: {reachable}")
+
+        # Find pending mail for these destinations
+        placeholders = ','.join('?' * len(reachable))
+        pending = self.db.fetchall(f"""
+            SELECT * FROM rap_pending_mail
+            WHERE UPPER(recipient_bbs) IN ({placeholders})
+              AND expires_at_us > ?
+        """, (*reachable, now_us))
+
+        for mail in pending:
+            mail_uuid = mail[1]  # mail_uuid column
+            sender_user_id = mail[2]
+            sender_username = mail[3]
+            sender_bbs = mail[4]
+            recipient_username = mail[5]
+            recipient_bbs = mail[6]
+            body_enc = mail[8]  # body_enc column
+
+            logger.info(f"Route to {recipient_bbs} online, retrying {mail_uuid[:8]}")
+
+            # Decrypt body for resend
+            try:
+                body = body_enc.decode('utf-8') if isinstance(body_enc, bytes) else str(body_enc)
+            except Exception as e:
+                logger.error(f"Failed to decode pending mail body: {e}")
+                continue
+
+            # Attempt to send
+            success, error = await self.send_remote_mail(
+                sender_username, sender_bbs,
+                recipient_username, recipient_bbs,
+                body, mail_uuid
+            )
+
+            if success:
+                # Remove from pending queue
+                self.db.execute(
+                    "DELETE FROM rap_pending_mail WHERE mail_uuid = ?",
+                    (mail_uuid,)
+                )
+                # Send notification to sender
+                await self._send_queued_mail_notification(sender_user_id, recipient_bbs, "sent")
+                logger.info(f"Pending mail {mail_uuid[:8]} to {recipient_bbs} resent successfully")
+            else:
+                # Update retry count
+                retry_count = mail[10] + 1  # retry_count column
+                self.db.execute(
+                    "UPDATE rap_pending_mail SET retry_count = ?, last_retry_us = ?, last_status = ? WHERE mail_uuid = ?",
+                    (retry_count, now_us, error, mail_uuid)
+                )
+                logger.warning(f"Pending mail {mail_uuid[:8]} retry failed: {error}")
+
+    async def _send_queued_mail_notification(self, user_id: int, dest_bbs: str, status: str):
+        """Send system message to user about queued mail status."""
+        try:
+            from ..db.messages import MessageRepository
+            from ..db.models import MessageType
+
+            msg_repo = MessageRepository(self.db)
+
+            if status == "sent":
+                subject = f"Queued mail to {dest_bbs} delivered"
+                body = f"Your message to {dest_bbs} was queued while the route was unavailable. It has now been delivered successfully."
+            elif status == "expired":
+                subject = f"Queued mail to {dest_bbs} expired"
+                body = f"Your message to {dest_bbs} could not be delivered within the retry period (24 hours) and has been discarded."
+            else:
+                return
+
+            # Create system mail to user
+            msg_repo.create_message(
+                msg_type=MessageType.SYSTEM,
+                recipient_user_id=user_id,
+                body_enc=body.encode('utf-8'),
+                subject_enc=subject.encode('utf-8'),
+            )
+
+            logger.info(f"Sent queued mail notification to user {user_id}: {status}")
+
+        except Exception as e:
+            logger.error(f"Failed to send queued mail notification: {e}")
+
+    async def queue_pending_mail(
+        self,
+        mail_uuid: str,
+        sender_user_id: int,
+        sender_username: str,
+        sender_bbs: str,
+        recipient_username: str,
+        recipient_bbs: str,
+        body: str,
+        status: str = "no_route"
+    ):
+        """
+        Queue mail for later delivery when route becomes available.
+
+        Called when send_remote_mail fails due to no route.
+        """
+        now_us = int(time.time() * 1_000_000)
+        expiry_seconds = getattr(self.config, 'rap_pending_mail_expiry_seconds', 86400)
+        expires_at_us = now_us + (expiry_seconds * 1_000_000)
+
+        try:
+            self.db.execute("""
+                INSERT OR REPLACE INTO rap_pending_mail
+                (mail_uuid, sender_user_id, sender_username, sender_bbs,
+                 recipient_username, recipient_bbs, body_enc,
+                 queued_at_us, expires_at_us, retry_count, last_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """, (
+                mail_uuid, sender_user_id, sender_username, sender_bbs,
+                recipient_username, recipient_bbs, body.encode('utf-8'),
+                now_us, expires_at_us, status
+            ))
+
+            logger.info(f"Queued mail {mail_uuid[:8]} to {recipient_bbs} for later delivery (status: {status})")
+
+        except Exception as e:
+            logger.error(f"Failed to queue pending mail: {e}")
+
+    def find_best_route(self, dest_bbs: str) -> Optional[tuple]:
+        """
+        Find best route to destination BBS.
+
+        Returns: (next_hop_node_id, hop_count, quality) or None
+        """
+        dest_bbs_upper = dest_bbs.upper()
+
+        # 1. Check if direct peer
+        direct_node = self.get_peer_node_id(dest_bbs)
+        if direct_node:
+            peer_row = self.db.fetchone(
+                "SELECT health_status, quality_score FROM bbs_peers WHERE node_id = ?",
+                (direct_node,)
+            )
+            if peer_row:
+                status = peer_row[0] or "unknown"
+                quality = peer_row[1] if peer_row[1] is not None else 1.0
+                if status in ("unknown", "alive"):
+                    return (direct_node, 1, quality)
+
+        # 2. Query route table for indirect routes
+        now_us = int(time.time() * 1_000_000)
+        route = self.db.fetchone("""
+            SELECT p.node_id, r.hop_count, r.quality_score
+            FROM rap_routes r
+            JOIN bbs_peers p ON r.via_peer_id = p.id
+            WHERE UPPER(r.dest_bbs) = ?
+              AND r.expires_at_us > ?
+              AND p.health_status IN ('unknown', 'alive')
+            ORDER BY r.hop_count ASC, r.quality_score DESC
+            LIMIT 1
+        """, (dest_bbs_upper, now_us))
+
+        if route:
+            return (route[0], route[1], route[2])
+
+        return None
