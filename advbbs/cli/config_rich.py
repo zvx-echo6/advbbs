@@ -108,7 +108,7 @@ class ConfigTool:
         return {
             "bbs": {
                 "name": "advBBS",
-                "callsign": "FQ51",
+                "callsign": "ADV",
                 "admin_password": "changeme",
                 "motd": "Welcome to advBBS!",
                 "timezone": "America/Boise",
@@ -271,7 +271,7 @@ class ConfigTool:
         info_table.add_column("Value", style="green")
 
         info_table.add_row("BBS Name", self._get("bbs", "name", "advBBS"))
-        info_table.add_row("Callsign", self._get("bbs", "callsign", "FQ51"))
+        info_table.add_row("Callsign", self._get("bbs", "callsign", "ADV"))
         info_table.add_row("Mode", self._get("operating_mode", "mode", "full"))
         info_table.add_row("Config File", str(self.config_path))
 
@@ -407,7 +407,7 @@ class ConfigTool:
             table.add_column("Current Value", style="cyan")
 
             table.add_row("1. BBS Name", self._get("bbs", "name", "advBBS"))
-            table.add_row("2. Callsign", self._get("bbs", "callsign", "FQ51"))
+            table.add_row("2. Callsign", self._get("bbs", "callsign", "ADV"))
             table.add_row("3. Admin Password", "********")
             table.add_row("4. MOTD", self._get("bbs", "motd", "")[:40] + "...")
             table.add_row("5. Timezone", self._get("bbs", "timezone", "America/Boise"))
@@ -435,7 +435,7 @@ class ConfigTool:
                 value = Prompt.ask("BBS Name", default=self._get("bbs", "name", "advBBS"))
                 self._set("bbs", "name", value)
             elif choice == 2:
-                value = Prompt.ask("Callsign", default=self._get("bbs", "callsign", "FQ51"))
+                value = Prompt.ask("Callsign", default=self._get("bbs", "callsign", "ADV"))
                 self._set("bbs", "callsign", value)
             elif choice == 3:
                 self._change_password()
@@ -1485,7 +1485,7 @@ class ConfigTool:
             name = Prompt.ask("BBS Name", default=self._get("bbs", "name", "advBBS"))
             self._set("bbs", "name", name)
 
-            callsign = Prompt.ask("Callsign (short identifier)", default=self._get("bbs", "callsign", "FQ51"))
+            callsign = Prompt.ask("Callsign (short identifier)", default=self._get("bbs", "callsign", "ADV"))
             self._set("bbs", "callsign", callsign)
 
             motd = Prompt.ask("Welcome message", default=self._get("bbs", "motd", "Welcome to advBBS!"))
