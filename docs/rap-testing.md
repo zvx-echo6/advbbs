@@ -41,15 +41,19 @@ mesh-bbs-e  # TB4 node (!00000008)
 
 ## RAP Configuration
 
-Each BBS uses these RAP settings:
+Each BBS uses these RAP settings (test environment with faster intervals):
 
 ```toml
 [sync]
 enabled = true
 rap_enabled = true
-rap_heartbeat_interval_seconds = 30
+rap_heartbeat_interval_seconds = 30      # Fast for testing (default: 43200 = 12 hours)
+rap_route_expiry_seconds = 3600          # Fast for testing (default: 129600 = 36 hours)
+rap_route_share_interval_seconds = 300   # Fast for testing (default: 86400 = 24 hours)
 mail_max_hops = 5
 ```
+
+**Note:** Production defaults use 12-hour heartbeats, 36-hour route expiry, and 24-hour route sharing. The values above are accelerated for testing purposes.
 
 ## Test Results
 
@@ -133,14 +137,17 @@ Mail delivery includes configurable retry options in `config.toml`:
 
 ```toml
 [sync]
-mail_delivery_max_retries = 3        # Retry failed deliveries up to 3 times
-mail_delivery_retry_delay = 60       # Wait 60 seconds between retries
-mail_delivery_timeout = 120          # Timeout waiting for MAILACK/MAILDLV
+mail_retry_attempts = 3              # Retry failed deliveries up to 3 times
+mail_retry_backoff_base = 60         # Base backoff time between retries
+mail_ack_timeout_seconds = 30        # Timeout waiting for MAILACK
+maildlv_retry_interval_seconds = 45  # MAILDLV retry interval
+maildlv_max_attempts = 3             # Max MAILDLV retry attempts
+maildlv_timeout_seconds = 300        # Total timeout for delivery confirmation
 ```
 
 ### Route Expiry
 
-Routes learned via RAP expire after `rap_route_expiry_seconds` (default: 3600). This ensures stale routes are automatically removed when:
+Routes learned via RAP expire after `rap_route_expiry_seconds` (default: 129600 seconds / 36 hours). This ensures stale routes are automatically removed when:
 - Intermediate nodes go offline
 - Network topology changes
 - Peer health degrades to "dead" status

@@ -120,6 +120,16 @@ class SyncConfig:
     maildlv_timeout_seconds: int = 300
     participate_in_mail_relay: bool = True
     peers: list[SyncPeer] = field(default_factory=list)
+    # RAP (Route Announcement Protocol) settings
+    rap_enabled: bool = True
+    rap_heartbeat_interval_seconds: int = 43200  # 12 hours
+    rap_heartbeat_timeout_seconds: int = 60  # Wait for PONG
+    rap_unreachable_threshold: int = 2  # Failed pings before UNREACHABLE
+    rap_dead_threshold: int = 5  # Total failed pings before DEAD
+    rap_route_expiry_seconds: int = 129600  # Routes expire after 36 hours (3 missed heartbeats)
+    rap_route_share_interval_seconds: int = 86400  # Share full route table every 24 hours
+    rap_pending_mail_expiry_seconds: int = 86400  # Pending mail expires after 24 hours
+    rap_pending_mail_max_retries: int = 10  # Max retry attempts
 
 
 @dataclass

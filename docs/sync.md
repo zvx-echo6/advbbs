@@ -191,13 +191,15 @@ enabled = true
 
 # RAP settings
 rap_enabled = true
-rap_heartbeat_interval_seconds = 300    # Send PING every 5 minutes
-rap_heartbeat_timeout_seconds = 30      # Wait for PONG response
-rap_unreachable_threshold = 2           # Failed pings before UNREACHABLE
-rap_dead_threshold = 5                  # Failed pings before DEAD
-rap_route_expiry_seconds = 3600         # Routes expire after 1 hour
-rap_route_share_interval_seconds = 900  # Share routes every 15 min
+rap_heartbeat_interval_seconds = 43200   # Send PING every 12 hours
+rap_heartbeat_timeout_seconds = 60       # Wait for PONG response
+rap_unreachable_threshold = 2            # Failed pings before UNREACHABLE
+rap_dead_threshold = 5                   # Failed pings before DEAD
+rap_route_expiry_seconds = 129600        # Routes expire after 36 hours (3 missed heartbeats)
+rap_route_share_interval_seconds = 86400 # Share routes every 24 hours
 ```
+
+**Note:** These conservative defaults are designed for low-bandwidth mesh networks. Routes remain valid across 3 missed heartbeat cycles (36 hours) before expiring.
 
 ### Route Discovery Example
 
