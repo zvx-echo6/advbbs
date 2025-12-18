@@ -151,6 +151,116 @@ To avoid flooding the mesh network:
 
 ---
 
+## Route Announcement Protocol (RAP)
+
+RAP enables automatic route discovery between federated BBS nodes, similar to distance-vector routing protocols like RIP. This allows mail to be routed through intermediate nodes without manual configuration of the full mesh topology.
+
+### Problem RAP Solves
+
+Without RAP, if a user tries to send mail to `alice@TB3` but their local BBS (TB0) doesn't have TB3 as a direct peer, the system has no way to know that TB3 might be reachable through intermediate nodes (e.g., TB0 → TB1 → TB2 → TB3).
+
+### How RAP Works
+
+Each BBS periodically:
+1. **Sends PING messages** to direct peers to verify connectivity
+2. **Receives PONG responses** containing the peer's route table
+3. **Shares route tables** with peers via RAP_ROUTES messages
+4. **Learns routes** to distant BBS nodes through peer advertisements
+
+### RAP Message Types
+
+| Message | Purpose | Payload Format |
+|---------|---------|----------------|
+| `RAP_PING` | Heartbeat/connectivity check | `timestamp_us` |
+| `RAP_PONG` | Response with route table | `timestamp_us\|route_table` |
+| `RAP_ROUTES` | Full route table announcement | `route_table` |
+
+**Route Table Format:** `bbs1:hop:quality;bbs2:hop:quality;...`
+
+Example: `TB0:0:1.0;TB1:1:1.00;TB2:2:1.00;TB3:3:1.00`
+- `TB0:0:1.0` - Self (hop 0)
+- `TB1:1:1.00` - Direct peer (hop 1)
+- `TB2:2:1.00` - Learned via TB1 (hop 2)
+- `TB3:3:1.00` - Learned via TB1→TB2 (hop 3)
+
+### Configuration
+
+```toml
+[sync]
+enabled = true
+
+# RAP settings
+rap_enabled = true
+rap_heartbeat_interval_seconds = 300    # Send PING every 5 minutes
+rap_heartbeat_timeout_seconds = 30      # Wait for PONG response
+rap_unreachable_threshold = 2           # Failed pings before UNREACHABLE
+rap_dead_threshold = 5                  # Failed pings before DEAD
+rap_route_expiry_seconds = 3600         # Routes expire after 1 hour
+rap_route_share_interval_seconds = 900  # Share routes every 15 min
+```
+
+### Route Discovery Example
+
+Given this topology where only adjacent nodes are configured as peers:
+
+```
+TB0 <---> TB1 <---> TB2 <---> TB3
+```
+
+**Peer Configuration:**
+- TB0: peer = TB1
+- TB1: peers = TB0, TB2
+- TB2: peers = TB1, TB3
+- TB3: peer = TB2
+
+**After RAP convergence:**
+
+| Node | Discovered Routes |
+|------|-------------------|
+| TB0  | TB0:0, TB1:1, TB2:2, TB3:3 |
+| TB1  | TB1:0, TB0:1, TB2:1, TB3:2 |
+| TB2  | TB2:0, TB1:1, TB3:1, TB0:2 |
+| TB3  | TB3:0, TB2:1, TB1:2, TB0:3 |
+
+Each node discovers the full network topology automatically.
+
+### Peer Health Tracking
+
+RAP maintains peer health status based on PING/PONG success:
+
+| Status | Meaning |
+|--------|---------|
+| `unknown` | New peer, not yet contacted |
+| `alive` | Responding to PINGs |
+| `unreachable` | Failed `rap_unreachable_threshold` consecutive PINGs |
+| `dead` | Failed `rap_dead_threshold` consecutive PINGs |
+
+Dead peers are excluded from route tables until they respond again.
+
+### Database Tables for RAP
+
+```sql
+-- Peer health tracking (extends bbs_peers)
+ALTER TABLE bbs_peers ADD COLUMN health_status TEXT DEFAULT 'unknown';
+ALTER TABLE bbs_peers ADD COLUMN quality_score REAL DEFAULT 1.0;
+
+-- Learned routes from RAP
+CREATE TABLE rap_routes (
+    id              INTEGER PRIMARY KEY,
+    dest_bbs        TEXT NOT NULL,           -- Destination BBS callsign
+    next_hop_peer_id INTEGER NOT NULL,       -- Peer ID to route through
+    hop_count       INTEGER NOT NULL,
+    quality_score   REAL DEFAULT 1.0,
+    learned_from_us INTEGER,                 -- When we learned this route
+    expires_at_us   INTEGER,                 -- Route expiry time
+    FOREIGN KEY (next_hop_peer_id) REFERENCES bbs_peers(id)
+);
+```
+
+For detailed RAP testing documentation with multi-hop mail delivery examples, see [rap-testing.md](rap-testing.md).
+
+---
+
 ## Database Tables
 
 ### bbs_peers

@@ -704,9 +704,18 @@ class SyncManager:
                 return True
 
             # Not for us - need to relay
+            # First try direct peer lookup
             dest_node = self.get_peer_node_id(to_bbs)
+
             if not dest_node:
-                # Don't know destination - try to relay to another peer
+                # Not a direct peer - check RAP routing table
+                route = self.find_best_route(to_bbs)
+                if route:
+                    dest_node = route[0]  # next_hop_node_id
+                    logger.info(f"MAILREQ {uuid[:8]}: Using RAP route to {to_bbs} via {dest_node} ({route[1]} hops)")
+
+            if not dest_node:
+                # Don't know destination - send MAILNAK
                 logger.warning(f"MAILREQ {uuid[:8]}: No route to {to_bbs}, sending MAILNAK")
                 self._schedule_async(
                     self._send_protocol_dm(f"MAILNAK|{uuid}|NOROUTE", sender)
