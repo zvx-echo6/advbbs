@@ -11,10 +11,12 @@ This document describes the test setup and results for the Route Announcement Pr
 ### Test Topology
 
 ```
-TB0 <---> TB1 <---> TB2 <---> TB3 <---> TB4
+BBS0 (B0) <---> BBS1 (B1) <---> BBS2 (B2) <---> BBS3 (B3) <---> BBS4 (B4)
+!000000c8      !00000190      !00000258      !00000320      !2d195e17
 
 5-node linear topology where:
-- Each node only has direct peers configured for adjacent nodes
+- Each BBS only has direct peers configured for adjacent nodes
+- User nodes (node0-node4) connect to their respective BBS for testing
 - RAP enables discovery of non-adjacent nodes through route propagation
 ```
 
@@ -22,22 +24,21 @@ TB0 <---> TB1 <---> TB2 <---> TB3 <---> TB4
 
 | Node | Callsign | Mesh Port | Node ID | Direct Peers |
 |------|----------|-----------|---------|--------------|
-| TB0 | TB0 | 4407 | !000007d1 | TB1 |
-| TB1 | TB1 | 4408 | !000007d2 | TB0, TB2 |
-| TB2 | TB2 | 4409 | !000007d3 | TB1, TB3 |
-| TB3 | TB3 | 4410 | !00000007 | TB2, TB4 |
-| TB4 | TB4 | 4411 | !00000008 | TB3 |
+| BBS0 | B0 | 4401 | !000000c8 | BBS1 |
+| BBS1 | B1 | 4403 | !00000190 | BBS0, BBS2 |
+| BBS2 | B2 | 4405 | !00000258 | BBS1, BBS3 |
+| BBS3 | B3 | 4407 | !00000320 | BBS2, BBS4 |
+| BBS4 | B4 | 4409 | !2d195e17 | BBS3 |
 
-### Docker Containers
+### User Nodes (for testing)
 
-```bash
-# Mesh containers (meshtasticd with MQTT)
-mesh-bbs-a  # TB0 node (!000007d1)
-mesh-bbs-b  # TB1 node (!000007d2)
-mesh-bbs-c  # TB2 node (!000007d3)
-mesh-bbs-d  # TB3 node (!00000007)
-mesh-bbs-e  # TB4 node (!00000008)
-```
+| Node | Mesh Port | Node ID | Connected BBS |
+|------|-----------|---------|---------------|
+| node0 | 4400 | !00000064 | BBS0 |
+| node1 | 4402 | !0000012c | BBS1 |
+| node2 | 4404 | !000001f4 | BBS2 |
+| node3 | 4406 | !000002bc | BBS3 |
+| node4 | 4408 | !00000384 | BBS4 |
 
 ## RAP Configuration
 
@@ -48,28 +49,75 @@ Each BBS uses these RAP settings (test environment with faster intervals):
 enabled = true
 rap_enabled = true
 rap_heartbeat_interval_seconds = 30      # Fast for testing (default: 43200 = 12 hours)
-rap_route_expiry_seconds = 3600          # Fast for testing (default: 129600 = 36 hours)
-rap_route_share_interval_seconds = 300   # Fast for testing (default: 86400 = 24 hours)
+rap_heartbeat_timeout_seconds = 15
+rap_unreachable_threshold = 2
+rap_dead_threshold = 5
+rap_route_expiry_seconds = 180           # Fast for testing (default: 129600 = 36 hours)
+rap_route_share_interval_seconds = 60    # Fast for testing (default: 86400 = 24 hours)
 mail_max_hops = 5
 ```
 
 **Note:** Production defaults use 12-hour heartbeats, 36-hour route expiry, and 24-hour route sharing. The values above are accelerated for testing purposes.
 
+## Implementation Notes
+
+### Rate Limiting (Critical)
+
+The meshtasticd simulator (and real Meshtastic devices) rate limits TEXT_MESSAGE_APP messages. Without rate limiting, messages sent in rapid succession will be silently dropped.
+
+**Solution:** The `MeshInterface` class includes rate limiting:
+
+```python
+# In __init__
+self._last_send_time = 0
+self._send_min_interval = 3.5  # seconds between consecutive sends
+
+# In send_text, before sending
+now = time.time()
+elapsed = now - self._last_send_time
+if elapsed < self._send_min_interval:
+    wait_time = self._send_min_interval - elapsed
+    time.sleep(wait_time)
+self._last_send_time = time.time()
+```
+
+### send_dm_wait_ack Method
+
+For reliable MAILDAT delivery, the `send_dm_wait_ack` method sends a message and waits for mesh-level ACK:
+
+```python
+async def send_dm_wait_ack(
+    self,
+    text: str,
+    destination: str,
+    timeout: float = 30.0
+) -> tuple[bool, str]:
+    """Send DM and wait for mesh-level ACK."""
+```
+
+This ensures MAILDAT chunks are acknowledged at the mesh layer before proceeding.
+
 ## Test Results
 
 ### Route Discovery
 
-After RAP convergence, each node discovered the full network topology:
+After RAP convergence (~60-90 seconds), each node discovered the full network topology:
 
-| Node | Discovered Routes |
-|------|-------------------|
-| TB0 | TB0:0, TB1:1, TB2:2, TB3:3, TB4:4 |
-| TB1 | TB1:0, TB0:1, TB2:1, TB3:2, TB4:3 |
-| TB2 | TB2:0, TB1:1, TB3:1, TB0:2, TB4:2 |
-| TB3 | TB3:0, TB2:1, TB4:1, TB1:2, TB0:3 |
-| TB4 | TB4:0, TB3:1, TB2:2, TB1:3, TB0:4 |
+**BBS0 Route Table:**
+```
+dest_bbs | hop_count
+---------|----------
+B1       | 1
+B2       | 2
+B3       | 3
+B4       | 4
+BBS1     | 3
+BBS2     | 2
+BBS3     | 3
+BBS4     | 4
+```
 
-**Key observation:** TB0 discovered TB4 at 4 hops and TB4 discovered TB0 at 4 hops, even though they have no direct peer relationship.
+**Key observation:** BBS0 discovered BBS4/B4 at 4 hops, even though they have no direct peer relationship.
 
 ### RAP Message Flow
 
@@ -87,119 +135,126 @@ After RAP convergence, each node discovered the full network topology:
 bbs_name:hop_count:quality_score;bbs_name:hop_count:quality_score;...
 ```
 
-Example from TB0:
+Example from BBS0:
 ```
-TB0:0:1.0;TB1:1:1.00;TB2:2:1.00;TB3:3:1.00;TB4:4:1.00
+B0:0:1.0;BBS1:1:1.00;B1:1:1.00;BBS0:2:1.00;BBS2:2:1.00;B2:2:1.00;BBS3:3:1.00;B3:3:1.00;BBS4:4:1.00;B4:4:1.00
 ```
 
 ### Sample Message Trace
 
-**TB0 receiving routes from TB1:**
+**BBS0 receiving routes from BBS1:**
 ```
-advBBS|1|RAP_ROUTES|TB1:0:1.0;TB0:1:1.00;TB2:1:1.00;TB3:2:1.00;TB4:3:1.00
-```
-
-TB0 processes this by adding +1 to each hop count:
-- TB1:0 becomes TB1:1 (direct peer)
-- TB2:1 becomes TB2:2
-- TB3:2 becomes TB3:3
-- TB4:3 becomes TB4:4
-
-**TB0 advertising its routes:**
-```
-advBBS|1|RAP_ROUTES|TB0:0:1.0;TB1:1:1.00;TB2:2:1.00;TB3:3:1.00;TB4:4:1.00
+advBBS|1|RAP_ROUTES|B1:0:1.0;BBS0:1:1.00;BBS2:1:1.00;B2:1:1.00;B0:1:1.00;BBS1:2:1.00;BBS3:2:1.00;B3:2:1.00;BBS4:3:1.00;B4:3:1.00
 ```
 
-## Convergence Time
+BBS0 processes this by adding +1 to each hop count (except itself):
+- B1:0 becomes B1:1 (direct peer)
+- BBS2:1 becomes BBS2:2
+- BBS3:2 becomes BBS3:3
+- BBS4:3 becomes BBS4:4
 
-With `rap_heartbeat_interval_seconds = 30`:
-- 4-node topology converges in ~60-90 seconds
-- 5-node topology converges in ~90-120 seconds
+## 4-Hop Mail Delivery Test
 
-Route propagation requires multiple RAP exchange cycles to reach distant nodes.
+### Test Scenario
 
-## Reliability Considerations
+Send mail from user0@B0 to user4@B4 (4 hops).
 
-### Multi-Hop Delivery Risks
+### Complete Message Flow
 
-Each hop in a multi-hop mail delivery introduces potential failure points:
+```
+1. user0 sends "!send user4@B4 4-hop test from BBS0!" to BBS0
 
-| Risk | Description | Mitigation |
-|------|-------------|------------|
-| Intermediate node offline | A relay BBS goes down between hops | RAP detects via missed PINGs, routes expire |
-| RF propagation failure | Meshtastic packet doesn't reach next hop | Meshtastic's built-in ACK and retry |
-| Message corruption | Data corrupted in transit | Protocol-level validation |
-| Timeout | Relay node too slow to respond | Configurable timeouts and retry limits |
+2. BBS0:
+   - Creates mail: 0396da51-ad25-4c54-a6d7-9ff73c14c013
+   - Looks up B4 in RAP routes: 4 hops via BBS1
+   - Sends MAILREQ to BBS1
 
-### Retry Configuration
+3. BBS1:
+   - Receives MAILREQ (hop 1)
+   - Looks up B4: 3 hops via BBS2
+   - Relays MAILREQ to BBS2
 
-Mail delivery includes configurable retry options in `config.toml`:
+4. BBS2:
+   - Receives MAILREQ (hop 2)
+   - Looks up B4: 2 hops via BBS3
+   - Relays MAILREQ to BBS3
 
-```toml
-[sync]
-mail_retry_attempts = 3              # Retry failed deliveries up to 3 times
-mail_retry_backoff_base = 60         # Base backoff time between retries
-mail_ack_timeout_seconds = 30        # Timeout waiting for MAILACK
-maildlv_retry_interval_seconds = 45  # MAILDLV retry interval
-maildlv_max_attempts = 3             # Max MAILDLV retry attempts
-maildlv_timeout_seconds = 300        # Total timeout for delivery confirmation
+5. BBS3:
+   - Receives MAILREQ (hop 3)
+   - Looks up B4: 1 hop via BBS4
+   - Relays MAILREQ to BBS4
+
+6. BBS4:
+   - Receives MAILREQ (hop 4)
+   - user4 exists locally - accepts mail
+   - Sends MAILACK|OK back to BBS3
+
+7. MAILACK propagates back:
+   BBS4 -> BBS3 -> BBS2 -> BBS1 -> BBS0
+
+8. BBS0 receives MAILACK|OK:
+   - Sends MAILDAT with message content
+
+9. MAILDAT propagates forward:
+   BBS0 -> BBS1 -> BBS2 -> BBS3 -> BBS4
+
+10. BBS4:
+    - Receives MAILDAT: "4-hop test from BBS0!"
+    - Stores in database for user4
+    - Sends MAILDLV confirmation back
 ```
 
-### Route Expiry
+### Actual Log Output
 
-Routes learned via RAP expire after `rap_route_expiry_seconds` (default: 129600 seconds / 36 hours). This ensures stale routes are automatically removed when:
-- Intermediate nodes go offline
-- Network topology changes
-- Peer health degrades to "dead" status
-
-### Scalability vs Reliability Trade-off
-
-While RAP theoretically supports unlimited hop counts (bounded only by Meshtastic message size limits), practical deployments should consider:
-
-1. **Probability of failure increases with hops**: If each hop has 95% success rate, a 4-hop path has ~81% success rate (0.95^4)
-2. **Latency increases linearly**: Each hop adds ~3 seconds (chunk delay) plus RF propagation time
-3. **Mesh congestion**: More hops = more RF traffic on the mesh
-
-**Recommendation:** For production deployments, prefer direct peering where possible. Use multi-hop routing as a fallback for truly disconnected regions of the mesh.
-
-## Configuration Notes
-
-### Max Hops
-
-The `mail_max_hops` setting affects RAP route storage. Routes with hop counts exceeding this value are not stored. For a 5-node linear topology, set `mail_max_hops = 5` or higher.
-
-**Note:** There is no hard limit on hop count - set this based on your expected network diameter. However, higher hop counts increase delivery failure probability.
-
-### MQTT Transport Setup
-
-Each meshtasticd container requires:
-```bash
-meshtastic --host localhost:<port> \
-  --set mqtt.enabled true \
-  --set mqtt.address <broker_ip> \
-  --set mqtt.json_enabled true \
-  --set mqtt.encryption_enabled false
-
-meshtastic --host localhost:<port> \
-  --ch-index 0 \
-  --ch-set uplink_enabled true \
-  --ch-set downlink_enabled true
+**BBS0 (sender):**
+```
+Created remote mail 0396da51: user0@B0 -> user4@B4
+MAILREQ|0396da51-ad25-4c54-a6d7-9ff73c14c013|user0|B0|user4|B4|1|1|B0
+Mail queued for user4@B4
 ```
 
-## Database Tables
-
-### bbs_peers
-
-Stores direct peers with health tracking:
-```sql
-SELECT node_id, name, callsign, health_status FROM bbs_peers;
+**BBS1 (relay 1):**
+```
+MAILREQ received: 0396da51 from user0@B0 to user4@B4 (hop 1)
+MAILREQ 0396da51: Using RAP route to B4 via !00000258 (3 hops)
+MAILREQ 0396da51: Relaying to B4 via !00000258
 ```
 
-### rap_routes
+**BBS2 (relay 2):**
+```
+MAILREQ received: 0396da51 from user0@B0 to user4@B4 (hop 2)
+MAILREQ 0396da51: Using RAP route to B4 via !00000320 (2 hops)
+MAILDAT 0396da51: Relaying part 1/1 to !00000320
+```
 
-Stores learned routes from RAP:
-```sql
-SELECT dest_bbs, hop_count, quality_score FROM rap_routes;
+**BBS3 (relay 3):**
+```
+MAILREQ received: 0396da51 from user0@B0 to user4@B4 (hop 3)
+MAILREQ 0396da51: Using RAP route to B4 via !2d195e17 (1 hops)
+MAILDAT 0396da51: Relaying part 1/1 to !2d195e17
+```
+
+**BBS4 (destination):**
+```
+MAILREQ received: 0396da51 from user0@B0 to user4@B4 (hop 4)
+MAILREQ 0396da51: Accepted for user4, sending MAILACK
+MAILDAT received: 0396da51 part 1/1 from !00000320
+MAILDAT 0396da51: Stored part 1, have 1/1
+MAILDAT 0396da51: All parts received, delivering
+Delivering remote mail 0396da51: user0@B0 -> user4
+Stored incoming remote mail 0396da51 from user0@B0
+DELIVER 0396da51: Stored in database for user4
+```
+
+### Route Tracking (Loop Prevention)
+
+Each hop appends itself to the route field:
+
+```
+BBS0 sends:   MAILREQ|uuid|user0|B0|user4|B4|1|1|B0
+BBS1 relays:  MAILREQ|uuid|user0|B0|user4|B4|2|1|B0,B1
+BBS2 relays:  MAILREQ|uuid|user0|B0|user4|B4|3|1|B0,B1,B2
+BBS3 relays:  MAILREQ|uuid|user0|B0|user4|B4|4|1|B0,B1,B2,B3
 ```
 
 ## Reproducing the Test
@@ -210,124 +265,131 @@ SELECT dest_bbs, hop_count, quality_score FROM rap_routes;
 2. Mosquitto MQTT broker on port 1883
 3. advBBS installed in a Python virtualenv
 
-### Setup Script
+### Quick Setup Script
 
 ```bash
-# Create mesh containers
-for port in 4407 4408 4409 4410 4411; do
-  hwid=$(printf "%08x" $((port - 4400)))
-  docker run -d --name mesh-bbs-$port --network host \
-    -v ~/mesh-sim/node-$port:/data \
-    meshtastic/meshtasticd:beta \
-    meshtasticd --sim --hwid $hwid -p $port -d /data
+#!/bin/bash
+# RAP Test Setup - 5 BBS nodes + 5 user nodes
+
+HOST_IP=$(hostname -I | awk "{print \$1}")
+
+# Install Mosquitto
+sudo apt-get install -y mosquitto mosquitto-clients
+sudo systemctl start mosquitto
+
+# Create directories
+mkdir -p ~/bbs-test ~/mesh-sim/data
+cd ~/bbs-test
+
+# Clone and install advBBS
+git clone https://github.com/zvx-echo6/advbbs.git
+python3 -m venv venv
+source venv/bin/activate
+pip install -e advbbs/
+
+# Create mesh nodes (pairs: user node + BBS node)
+for i in 0 1 2 3 4; do
+    user_port=$((4400 + i*2))
+    bbs_port=$((4401 + i*2))
+    user_hwid=$(printf "%08x" $((100 + i*100)))
+    bbs_hwid=$(printf "%08x" $((200 + i*100)))
+    
+    # User node
+    docker run -d --name node$i --network host \
+        -v ~/mesh-sim/data/node$i:/data \
+        meshtastic/meshtasticd:beta \
+        meshtasticd --sim --hwid $user_hwid -p $user_port -d /data
+    
+    # BBS node
+    docker run -d --name bbs$i --network host \
+        -v ~/mesh-sim/data/bbs$i:/data \
+        meshtastic/meshtasticd:beta \
+        meshtasticd --sim --hwid $bbs_hwid -p $bbs_port -d /data
 done
 
-# Configure MQTT on each
-for port in 4407 4408 4409 4410 4411; do
-  meshtastic --host localhost:$port \
-    --set mqtt.enabled true \
-    --set mqtt.address $(hostname -I | awk '{print $1}') \
-    --set mqtt.json_enabled true \
-    --set mqtt.encryption_enabled false
-  docker restart mesh-bbs-$port
-  meshtastic --host localhost:$port \
-    --ch-index 0 --ch-set uplink_enabled true --ch-set downlink_enabled true
-  docker restart mesh-bbs-$port
+sleep 5
+
+# Configure MQTT on all nodes
+source ~/bbs-test/venv/bin/activate
+for port in 4400 4401 4402 4403 4404 4405 4406 4407 4408 4409; do
+    meshtastic --host 127.0.0.1:$port \
+        --set mqtt.enabled true \
+        --set mqtt.address $HOST_IP \
+        --set mqtt.json_enabled true \
+        --set mqtt.encryption_enabled false
+    docker restart $(docker ps -q --filter publish=$port) 2>/dev/null || true
+    sleep 2
+    meshtastic --host 127.0.0.1:$port \
+        --ch-index 0 --ch-set uplink_enabled true --ch-set downlink_enabled true
 done
+
+echo "Setup complete! Create BBS configs and start instances."
 ```
 
 ### Start BBS Instances
 
 ```bash
+source ~/bbs-test/venv/bin/activate
 for i in 0 1 2 3 4; do
-  cd ~/bbs-test/bbs$i
-  nohup advbbs --config ./config.toml > bbs$i.log 2>&1 &
+    cd ~/bbs-test/bbs$i
+    nohup advbbs --config ./config.toml > bbs$i.out 2>&1 &
+    sleep 2
 done
 ```
 
 ### Monitor RAP Activity
 
 ```bash
-# Watch RAP messages on a specific node
-tail -f ~/bbs-test/bbs0/bbs0.log | grep -E "RAP_PING|RAP_PONG|RAP_ROUTES"
+# Watch RAP messages on BBS0
+tail -f ~/bbs-test/bbs0/bbs0.out | grep -E "RAP_PING|RAP_PONG|RAP_ROUTES"
 
 # Check route tables
-for i in 0 1 2 3 4; do
-  echo "=== TB$i ==="
-  grep "SYNC PROTOCOL SENDING.*RAP_PONG" ~/bbs-test/bbs$i/bbs$i.log | tail -1
-done
+sqlite3 ~/bbs-test/bbs0/data/bbs0.db \
+    "SELECT dest_bbs, hop_count FROM rap_routes ORDER BY hop_count"
 ```
 
-## Multi-Hop Mail Routing
+### Send Test Mail
 
-RAP enables automatic route discovery which is used for multi-hop mail delivery. When a user sends mail to `user@TB4` from TB0, the system:
+```bash
+source ~/bbs-test/venv/bin/activate
+python3 << EOF
+import meshtastic.tcp_interface
+import time
 
-1. Looks up TB4 in the RAP route table
-2. Finds route: TB4 is 4 hops away via TB1
-3. Sends MAILREQ to TB1 (next hop)
-4. TB1 relays to TB2, TB2 to TB3, TB3 to TB4
-5. TB4 sends MAILACK back through the reverse path
-6. Mail chunks (MAILDAT) follow the same route
-7. MAILDLV confirmation returns to sender
+iface = meshtastic.tcp_interface.TCPInterface("127.0.0.1", portNumber=4400)
+time.sleep(3)
 
-### Mail Protocol Messages
+# Register user0 on BBS0
+iface.sendText("!register user0 password0", destinationId="!000000c8", channelIndex=0)
+time.sleep(10)
 
-| Message | Purpose | Flow Direction |
-|---------|---------|----------------|
-| MAILREQ | Request delivery, check route | Sender → Destination |
-| MAILACK | Accept mail, ready for chunks | Destination → Sender |
-| MAILNAK | Reject mail (user not found, loop, etc) | Destination → Sender |
-| MAILDAT | Message chunk (max 150 chars) | Sender → Destination |
-| MAILDLV | Delivery confirmation | Destination → Sender |
-
-### Route Tracking
-
-Each hop adds itself to the route field to prevent loops:
-
-```
-TB0 sends: MAILREQ|uuid|sender|TB0|testuser|TB4|1|1|TB0
-TB1 relays: MAILREQ|uuid|sender|TB0|testuser|TB4|2|1|TB0,TB1
-TB2 relays: MAILREQ|uuid|sender|TB0|testuser|TB4|3|1|TB0,TB1,TB2
-TB3 relays: MAILREQ|uuid|sender|TB0|testuser|TB4|4|1|TB0,TB1,TB2,TB3
-TB4 receives and processes (is destination)
+# Send mail to user4@B4
+iface.sendText("!send user4@B4 Test message via 4 hops!", destinationId="!000000c8", channelIndex=0)
+time.sleep(5)
+iface.close()
+EOF
 ```
 
-### Testing Multi-Hop Mail
+## Troubleshooting
 
-To test multi-hop mail delivery:
+### Messages Not Being Delivered
 
-1. Create users on source and destination BBS
-2. Send mail via `!send user@DEST_BBS message`
-3. Monitor logs on all intermediate nodes for MAILREQ/MAILDAT relay
-4. Verify delivery on destination BBS
+1. **Check rate limiting**: Ensure `_send_min_interval` is at least 3.5 seconds
+2. **Check MQTT connectivity**: All nodes must see each other via MQTT
+3. **Check RAP routes**: `SELECT * FROM rap_routes` should show destination
+4. **Check peer config**: Ensure peers are correctly configured in config.toml
 
-**Note:** The test VM environment uses simulated mesh nodes where all nodes are BBS nodes. For realistic mail testing, a separate user node (not configured as a BBS peer) should send commands to the source BBS.
+### RAP Routes Not Propagating
 
-### Successful Multi-Hop Test Results
+1. **Check peer health**: Peers must be in "healthy" state
+2. **Wait for convergence**: Routes take multiple heartbeat cycles to propagate
+3. **Check hop count**: Routes exceeding `mail_max_hops` are dropped
 
-Mail sent from TB0 to testuser4@TB4:
+### MAILREQ Sent But No MAILACK
 
-**Route taken:** TB0 → TB1 → TB2 → TB3 → TB4
-
-**Message trace:**
-```
-TB0: MAILREQ|3c232664|testuser0|TB0|testuser4|TB4|1|1|TB0
-TB1: MAILREQ received (hop 1), relaying to TB2
-TB2: MAILREQ received (hop 2), using RAP route to TB4 via TB3
-TB3: MAILREQ received (hop 3), relaying to TB4
-TB4: MAILREQ received (hop 4), accepted for testuser4
-TB4 → TB3 → TB2 → TB1 → TB0: MAILACK|OK
-TB0 → TB1 → TB2 → TB3 → TB4: MAILDAT|1/1|Multi-hop mail test via RAP routing!
-TB4: MAILDAT all parts received, delivering
-```
-
-**Key findings:**
-- RAP routing table successfully used for multi-hop relay
-- MAILREQ hop counter increments correctly at each relay
-- Route tracking (TB0,TB1,TB2,TB3) prevents loops
-- MAILACK propagates back through relay chain
-- MAILDAT chunks follow same route as MAILREQ
-- Total delivery time: ~30 seconds for 4-hop delivery
+1. **Check destination user exists**: User must be registered on destination BBS
+2. **Check route is valid**: Intermediate nodes must have valid routes
+3. **Check logs on all hops**: Look for MAILREQ/MAILNAK messages
 
 ## Test Date
 

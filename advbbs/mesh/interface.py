@@ -61,6 +61,11 @@ class MeshInterface:
         # Used to handle Meshtastic native replies to BBS messages
         self._reply_contexts: dict[int, dict] = {}  # requestId -> {type, context_data, expires_at}
 
+        # Send rate limiting - meshtasticd rate limits TEXT_MESSAGE_APP (portnum 1)
+        # We need at least 3 seconds between sends to avoid drops
+        self._last_send_time = 0
+        self._send_min_interval = 3.5  # seconds between consecutive sends
+
     @property
     def connected(self) -> bool:
         """Check if connected to Meshtastic device."""
@@ -331,6 +336,15 @@ class MeshInterface:
             return False
 
         try:
+            # Rate limit sends to avoid meshtasticd drops
+            now = time.time()
+            elapsed = now - self._last_send_time
+            if elapsed < self._send_min_interval:
+                wait_time = self._send_min_interval - elapsed
+                logger.debug(f"Rate limiting: waiting {wait_time:.1f}s before send")
+                time.sleep(wait_time)
+            self._last_send_time = time.time()
+
             logger.info(f"Sending to {destination} on channel {channel}: {text[:50]}...")
             # DEBUG: Log full sync protocol messages being sent
             if text.startswith(('MAILREQ|', 'MAILACK|', 'MAILNAK|', 'MAILDAT|', 'MAILDLV|', 'advBBS|')):
@@ -429,6 +443,76 @@ class MeshInterface:
             channel=0,  # DMs use channel 0
             want_ack=want_ack
         )
+
+    async def send_dm_wait_ack(
+        self,
+        text: str,
+        destination: str,
+        timeout: float = 30.0
+    ) -> tuple[bool, str]:
+        """
+        Send DM and wait for mesh-level ACK.
+
+        Args:
+            text: Message text
+            destination: Destination node ID
+            timeout: How long to wait for ACK (seconds)
+
+        Returns:
+            (success, error_reason) - success=True if ACKed, False if NAK/timeout
+        """
+        if not self.connected:
+            return False, "NOT_CONNECTED"
+
+        try:
+            # Send with ACK request
+            result = self._interface.sendText(
+                text=text,
+                destinationId=destination,
+                channelIndex=0,
+                wantAck=True
+            )
+
+            request_id = getattr(result, "id", None)
+            if not request_id:
+                return False, "NO_REQUEST_ID"
+
+            # Log for sync protocol messages
+            if text.startswith(("MAILREQ|", "MAILACK|", "MAILNAK|", "MAILDAT|", "MAILDLV|", "advBBS|")):
+                logger.info(f"SYNC PROTOCOL SENDING ({len(text)} chars): {text}")
+
+            logger.debug(f"Waiting for ACK on msg {request_id} to {destination}")
+
+            # Create an event to wait on
+            ack_event = asyncio.Event()
+            ack_result = {"success": None, "error": None}
+
+            # Store in pending with callback info
+            self._pending_acks[request_id] = {
+                "destination": destination,
+                "sent_at": time.time(),
+                "text_preview": text[:30],
+                "event": ack_event,
+                "result": ack_result,
+            }
+            self._ack_stats["sent"] += 1
+
+            # Wait for ACK with timeout
+            try:
+                await asyncio.wait_for(ack_event.wait(), timeout=timeout)
+                if ack_result["success"]:
+                    return True, ""
+                else:
+                    return False, ack_result.get("error", "UNKNOWN")
+            except asyncio.TimeoutError:
+                # Clean up
+                self._pending_acks.pop(request_id, None)
+                logger.warning(f"ACK timeout for msg {request_id} to {destination}")
+                return False, "TIMEOUT"
+
+        except Exception as e:
+            logger.error(f"Failed to send message to {destination}: {e}")
+            return False, str(e)
 
     async def send_broadcast(self, text: str, channel: int = 0) -> bool:
         """Send broadcast message to channel."""
