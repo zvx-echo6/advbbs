@@ -202,7 +202,7 @@ class Database:
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 node_id         TEXT UNIQUE NOT NULL,
                 bbs_name        TEXT,
-                protocol        TEXT DEFAULT 'fq51',
+                protocol        TEXT DEFAULT 'advbbs',
                 last_sync_us    INTEGER,
                 sync_enabled    INTEGER DEFAULT 1,
                 trust_level     INTEGER DEFAULT 0

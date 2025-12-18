@@ -172,7 +172,7 @@ class MeshInterface:
         logger.info(f"Message from {message_data['fromId']} (ch{message_data['channel']}): {log_text}")
 
         # DEBUG: Log full MAILREQ/sync protocol messages
-        if message_data['text'] and message_data['text'].startswith(('MAILREQ|', 'MAILACK|', 'MAILNAK|', 'MAILDAT|', 'MAILDLV|', 'FQ51|')):
+        if message_data['text'] and message_data['text'].startswith(('MAILREQ|', 'MAILACK|', 'MAILNAK|', 'MAILDAT|', 'MAILDLV|', 'advBBS|')):
             logger.info(f"SYNC PROTOCOL FULL TEXT ({len(message_data['text'])} chars): {message_data['text']}")
 
         # Call all registered handlers
@@ -333,7 +333,7 @@ class MeshInterface:
         try:
             logger.info(f"Sending to {destination} on channel {channel}: {text[:50]}...")
             # DEBUG: Log full sync protocol messages being sent
-            if text.startswith(('MAILREQ|', 'MAILACK|', 'MAILNAK|', 'MAILDAT|', 'MAILDLV|', 'FQ51|')):
+            if text.startswith(('MAILREQ|', 'MAILACK|', 'MAILNAK|', 'MAILDAT|', 'MAILDLV|', 'advBBS|')):
                 logger.info(f"SYNC PROTOCOL SENDING ({len(text)} chars): {text}")
             result = self._interface.sendText(
                 text=text,

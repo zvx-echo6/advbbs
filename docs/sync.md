@@ -23,13 +23,13 @@ enabled = true
 [[sync.peers]]
 node_id = "!abc12345"                  # Meshtastic node ID
 name = "REMOTE1"                       # BBS name (used in user@BBS addressing)
-protocol = "fq51"                      # Protocol type
+protocol = "advbbs"                      # Protocol type
 enabled = true                         # Enable/disable this peer
 
 [[sync.peers]]
 node_id = "!def67890"
 name = "REMOTE2"
-protocol = "fq51"
+protocol = "advbbs"
 enabled = true
 ```
 
@@ -71,7 +71,7 @@ def handle_mail_protocol(self, message: str, sender: str) -> bool:
 
 ---
 
-## FQ51 Native Protocol
+## advBBS Native Protocol
 
 The wire protocol for advBBS-to-advBBS communication.
 
@@ -89,7 +89,7 @@ The wire protocol for advBBS-to-advBBS communication.
 All messages use this format:
 
 ```
-FQ51|<version>|<msg_type>|<payload>
+advBBS|<version>|<msg_type>|<payload>
 ```
 
 - **Version**: Currently `1`
@@ -275,7 +275,7 @@ CREATE TABLE bbs_peers (
     node_id         TEXT UNIQUE NOT NULL,    -- Meshtastic node ID
     name            TEXT,                     -- BBS name
     callsign        TEXT,                     -- BBS callsign
-    protocol        TEXT DEFAULT 'fq51',
+    protocol        TEXT DEFAULT 'advbbs',
     capabilities    TEXT,                     -- mail
     last_seen_us    INTEGER,
     last_sync_us    INTEGER,
@@ -317,4 +317,4 @@ CREATE TABLE sync_log (
 
 advBBS is designed as a **polyglot BBS** - it can speak each external system's native protocol. We don't try to change how other BBS systems work; we participate as a peer in their existing networks.
 
-Currently only FQ51-to-FQ51 sync is implemented.
+Currently only advBBS-to-advBBS sync is implemented.

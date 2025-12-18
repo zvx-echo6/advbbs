@@ -883,11 +883,11 @@ require_mutual_trust = true          # Both sides must list each other
 ### Admin Protocol Messages
 
 ```
-FQ51|1|ADMIN|BAN|<username>|<reason>|<banned_by>|<timestamp>
-FQ51|1|ADMIN|UNBAN|<username>|<unbanned_by>|<timestamp>
-FQ51|1|ADMIN|PEER_STATUS|<node_id>|<status>|<user_count>|<msg_count>
-FQ51|1|ADMIN|PING|<timestamp>
-FQ51|1|ADMIN|PONG|<timestamp>|<latency_ms>
+advBBS|1|ADMIN|BAN|<username>|<reason>|<banned_by>|<timestamp>
+advBBS|1|ADMIN|UNBAN|<username>|<unbanned_by>|<timestamp>
+advBBS|1|ADMIN|PEER_STATUS|<node_id>|<status>|<user_count>|<msg_count>
+advBBS|1|ADMIN|PING|<timestamp>
+advBBS|1|ADMIN|PONG|<timestamp>|<latency_ms>
 ```
 
 ### Implementation
@@ -956,7 +956,7 @@ class AdminChannelHandler:
         if not self.enabled or not self.sync_bans:
             return
 
-        msg = f"FQ51|1|ADMIN|BAN|{username}|{reason}|{self.node_id}|{int(time.time())}"
+        msg = f"advBBS|1|ADMIN|BAN|{username}|{reason}|{self.node_id}|{int(time.time())}"
 
         for peer in self.trusted_peers:
             interface.sendText(msg, peer, channelIndex=self.channel)
@@ -986,7 +986,7 @@ ALTER TABLE users ADD COLUMN banned_at_us INTEGER;  -- When banned
 
 ### Design Philosophy
 
-advBBS acts as a **polyglot BBS** - it speaks each external system's native protocol when syncing with them, while using its own optimized DM-based protocol for FQ51-to-FQ51 communication.
+advBBS acts as a **polyglot BBS** - it speaks each external system's native protocol when syncing with them, while using its own optimized DM-based protocol for advBBS-to-advBBS communication.
 
 **We do NOT try to change how other BBS systems work.** We participate as a peer in their existing networks.
 
@@ -999,7 +999,7 @@ advBBS acts as a **polyglot BBS** - it speaks each external system's native prot
 | **meshing-around** | Yes | 🔜 Planned | Use their exact bbslink/bbsack protocol |
 | **frozenbbs** | **No** | ❌ Cannot sync | No protocol exists |
 
-> **Note:** Only FQ51-to-FQ51 sync is currently implemented. TC2-BBS and meshing-around compatibility layers exist in code but are not yet production-ready.
+> **Note:** Only advBBS-to-advBBS sync is currently implemented. TC2-BBS and meshing-around compatibility layers exist in code but are not yet production-ready.
 
 ### Sync Architecture Overview
 
@@ -1009,7 +1009,7 @@ advBBS acts as a **polyglot BBS** - it speaks each external system's native prot
 │  (advbbs/sync/manager.py)                                      │
 │                                                                  │
 │  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐     │
-│  │ FQ51Native  │  │    TC2      │  │   MeshingAround      │     │
+│  │ AdvBBSNative  │  │    TC2      │  │   MeshingAround      │     │
 │  │   Sync      │  │ Compat      │  │   Compat             │     │
 │  │ ✅ Active   │  │ 🔜 Planned  │  │   🔜 Planned         │     │
 │  └─────────────┘  └─────────────┘  └──────────────────────┘     │
@@ -1047,13 +1047,13 @@ mail_max_hops = 3                      # Max relay hops for mail
 [[sync.peers]]
 node_id = "!abc12345"                  # Meshtastic node ID
 name = "REMOTE1"                       # BBS name (used in user@BBS addressing)
-protocol = "fq51"                      # Protocol: fq51, tc2, or meshing-around
+protocol = "advbbs"                      # Protocol: advbbs, tc2, or meshing-around
 enabled = true                         # Enable/disable this peer
 
 [[sync.peers]]
 node_id = "!def67890"
 name = "REMOTE2"
-protocol = "fq51"
+protocol = "advbbs"
 enabled = true
 ```
 
@@ -1096,7 +1096,7 @@ CREATE TABLE bbs_peers (
     node_id         TEXT UNIQUE NOT NULL,    -- Meshtastic node ID (!abc123)
     name            TEXT,                     -- Human-readable BBS name
     callsign        TEXT,                     -- BBS callsign
-    protocol        TEXT DEFAULT 'fq51',      -- fq51, tc2, meshing-around
+    protocol        TEXT DEFAULT 'advbbs',      -- advbbs, tc2, meshing-around
     capabilities    TEXT,                     -- Comma-separated: mail,bulletin
     last_seen_us    INTEGER,                  -- Last message received
     last_sync_us    INTEGER,                  -- Last successful sync timestamp
@@ -1124,9 +1124,9 @@ CREATE TABLE sync_log (
 
 ---
 
-## FQ51 Native Protocol (Implemented)
+## advBBS Native Protocol (Implemented)
 
-The FQ51 native protocol is the primary sync mechanism for advBBS-to-advBBS communication.
+The advBBS native protocol is the primary sync mechanism for advBBS-to-advBBS communication.
 
 ### Why DM-Based?
 
@@ -1142,7 +1142,7 @@ The FQ51 native protocol is the primary sync mechanism for advBBS-to-advBBS comm
 All messages use this format:
 
 ```
-FQ51|<version>|<msg_type>|<payload>
+advBBS|<version>|<msg_type>|<payload>
 ```
 
 - **Version**: Currently `1`
@@ -1182,20 +1182,20 @@ The `SYNC_MSG` payload is JSON with these fields:
 ```
 BBS-A (Initiator)                           BBS-B (Peer)
     │                                            │
-    │──── FQ51|1|HELLO|FQ51:BBS-A|mail,bulletin ─▶│  Handshake
-    │◀─── FQ51|1|HELLO|FQ52:BBS-B|mail,bulletin ──│
+    │──── advBBS|1|HELLO|FQ51:BBS-A|mail,bulletin ─▶│  Handshake
+    │◀─── advBBS|1|HELLO|FQ52:BBS-B|mail,bulletin ──│
     │                                            │
     │  [Scheduled sync triggers]                 │
     │                                            │
-    │──── FQ51|1|SYNC_REQ|1702656000000000|bulletin ─▶│  Request
+    │──── advBBS|1|SYNC_REQ|1702656000000000|bulletin ─▶│  Request
     │                                            │
-    │◀─── FQ51|1|SYNC_MSG|<base64_json> ─────────│  Message 1
-    │──── FQ51|1|SYNC_ACK|uuid1 ────────────────▶│  ACK
+    │◀─── advBBS|1|SYNC_MSG|<base64_json> ─────────│  Message 1
+    │──── advBBS|1|SYNC_ACK|uuid1 ────────────────▶│  ACK
     │                                            │
-    │◀─── FQ51|1|SYNC_MSG|<base64_json> ─────────│  Message 2
-    │──── FQ51|1|SYNC_ACK|uuid2 ────────────────▶│  ACK
+    │◀─── advBBS|1|SYNC_MSG|<base64_json> ─────────│  Message 2
+    │──── advBBS|1|SYNC_ACK|uuid2 ────────────────▶│  ACK
     │                                            │
-    │◀─── FQ51|1|SYNC_DONE|2 ────────────────────│  Complete
+    │◀─── advBBS|1|SYNC_DONE|2 ────────────────────│  Complete
     │                                            │
 ```
 
@@ -1207,21 +1207,21 @@ BBS-A (Initiator)                           BBS-B (Peer)
 2. For each bulletin:
    - Check `sync_log` to avoid re-sending already-acked messages
    - Decrypt content using master key
-   - Create `FQ51SyncMessage` with board, sender, subject, body
+   - Create `AdvBBSSyncMessage` with board, sender, subject, body
    - Encode as JSON → base64
-   - Send as `FQ51|1|SYNC_MSG|<base64>`
+   - Send as `advBBS|1|SYNC_MSG|<base64>`
    - Track in `_pending_acks` for retry
    - Rate limit: 3 second delay between messages
-3. Send `FQ51|1|SYNC_DONE|<count>` when complete
+3. Send `advBBS|1|SYNC_DONE|<count>` when complete
 
 **Incoming (_handle_sync_message):**
 
-1. Decode base64 → JSON → `FQ51SyncMessage`
+1. Decode base64 → JSON → `AdvBBSSyncMessage`
 2. Check `message_exists(uuid)` for deduplication
 3. Get or create the board if needed
 4. Re-encrypt for local storage using master key
 5. Insert into `messages` table with `origin_bbs` set
-6. Send `FQ51|1|SYNC_ACK|<uuid>` back
+6. Send `advBBS|1|SYNC_ACK|<uuid>` back
 7. Log to `sync_log` table
 
 ### Encryption During Sync
@@ -1358,13 +1358,13 @@ MAILDLV|<uuid>|OK|<recipient>@<bbs>
 User on FQ51 sends: !send alice@REMOTE2 Hello!
 
 1. FQ51 creates MAILREQ:
-   MAILREQ|550e8400...|bob|FQ51|alice|REMOTE2|1|1|FQ51
+   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|1|1|FQ51
 
 2. FQ51 doesn't know REMOTE2 directly, but knows REMOTE1
    Forwards to REMOTE1
 
 3. REMOTE1 receives MAILREQ, adds itself to route:
-   MAILREQ|550e8400...|bob|FQ51|alice|REMOTE2|2|1|FQ51,REMOTE1
+   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|2|1|FQ51,REMOTE1
    Forwards to REMOTE2
 
 4. REMOTE2 receives MAILREQ:
@@ -1442,8 +1442,8 @@ def handle_sync_message(self, message: str, sender: str) -> bool:
         return self.handle_mail_protocol(message, sender)
 
     # Try FQ51 native (most specific prefix)
-    if self._fq51.is_fq51_message(message):
-        return self._fq51.handle_message(message, sender)
+    if self._native.is_advbbs_message(message):
+        return self._native.handle_message(message, sender)
 
     # Try meshing-around (specific prefixes)
     if self._meshing_around.is_meshing_around_message(message):
@@ -1826,7 +1826,7 @@ advbbs/
 │   │       ├── __init__.py
 │   │       ├── meshing_around.py # bbslink/bbsack protocol
 │   │       ├── tc2_bbs.py       # Pipe-delimited protocol
-│   │       └── fq51_native.py   # Native DM-based protocol
+│   │       └── advbbs_native.py   # Native DM-based protocol
 │   ├── web/
 │   │   ├── __init__.py
 │   │   ├── __main__.py          # Web reader entry point
@@ -1996,7 +1996,7 @@ core/bbs.py ◄─────────────────────�
 ```toml
 [bbs]
 name = "advBBS"
-callsign = "FQ51"                    # Short identifier
+callsign = "ADV"                    # Short identifier
 admin_password = "changeme"          # Required at startup
 motd = "Welcome to advBBS!"
 max_message_age_days = 30            # Auto-expire messages
@@ -2057,7 +2057,7 @@ protocol = "meshing-around"          # meshing-around bbslink protocol
 [[sync.peers]]
 node_id = "!ghi789"
 name = "advBBS-East"
-protocol = "fq51"                    # Native FQ51 DM-based protocol
+protocol = "advbbs"                    # Native FQ51 DM-based protocol
 
 # Bulletin sync (scheduled)
 bulletin_sync_interval_minutes = 60  # Hourly
@@ -2295,7 +2295,7 @@ Based on [Meshtasticd-Configuration-Tool](https://github.com/chrismyers2000/Mesh
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │   [1] BBS Name ................... advBBS                  │
-│   [2] Callsign ................... FQ51                     │
+│   [2] Callsign ................... ADV                     │
 │   [3] Admin Password ............. ********                 │
 │   [4] MOTD ....................... Welcome to advBBS!      │
 │   [5] Message Expiration ......... 30 days                  │
@@ -2829,7 +2829,7 @@ def status_display(bbs):
 - [ ] User configuration
 
 ### Phase 5: Inter-BBS Sync
-- [ ] FQ51 protocol implementation
+- [ ] advBBS protocol implementation
 - [ ] Peer discovery and management
 - [ ] Message synchronization
 - [ ] Compatibility adapters

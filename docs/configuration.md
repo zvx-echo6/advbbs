@@ -26,7 +26,7 @@ serial_port = "/dev/ttyUSB0"
 ```toml
 [bbs]
 name = "advBBS"                     # Display name
-callsign = "FQ51"                    # Short identifier (used in user@BBS addressing)
+callsign = "ADV"                    # Short identifier (used in user@BBS addressing)
 admin_password = "changeme"          # Required at startup
 motd = "Welcome to advBBS!"         # Message of the day
 max_message_age_days = 30            # Auto-expire old messages
@@ -131,7 +131,7 @@ Add peer BBS nodes:
 [[sync.peers]]
 node_id = "!abc12345"                # Meshtastic node ID
 name = "REMOTE1"                     # BBS callsign (for user@BBS addressing)
-protocol = "fq51"                    # Protocol: fq51
+protocol = "advbbs"                    # Protocol: advbbs
 enabled = true                       # Enable/disable this peer
 ```
 
@@ -143,13 +143,13 @@ enabled = true                       # Enable/disable this peer
 [[sync.peers]]
 node_id = "!abc12345"
 name = "TV51"
-protocol = "fq51"
+protocol = "advbbs"
 enabled = true
 
 [[sync.peers]]
 node_id = "!def67890"
 name = "AIDA"
-protocol = "fq51"
+protocol = "advbbs"
 enabled = true
 ```
 

@@ -1,10 +1,10 @@
 """advBBS Sync Module - Inter-BBS synchronization."""
 
 from .manager import SyncManager
-from .compat.fq51_native import FQ51NativeSync, FQ51SyncMessage
+from .compat.advbbs_native import AdvBBSNativeSync, AdvBBSSyncMessage
 
 __all__ = [
     "SyncManager",
-    "FQ51NativeSync",
-    "FQ51SyncMessage",
+    "AdvBBSNativeSync",
+    "AdvBBSSyncMessage",
 ]

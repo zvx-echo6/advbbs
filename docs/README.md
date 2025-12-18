@@ -145,7 +145,7 @@ The callsign is a human-friendly name you configure. The node ID is assigned by 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  BBS: "advBBS"                                         │
-│  Callsign: FQ51         ← Used in user@FQ51 addressing  │
+│  Callsign: ADV         ← Used in user@FQ51 addressing  │
 │  Node ID: !def67890     ← Meshtastic identifier         │
 └─────────────────────────────────────────────────────────┘
 ```

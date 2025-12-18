@@ -1,10 +1,10 @@
 """
-advBBS Native Sync Protocol (FQ51-compatible)
+advBBS Native Sync Protocol 
 
-DM-based sync for advBBS and FQ51BBS inter-BBS communication.
-Designed for efficient, secure mesh sync between advBBS/FQ51BBS instances.
+DM-based sync for advBBS inter-BBS communication.
+Designed for efficient, secure mesh sync between advBBS instances.
 
-Protocol format: FQ51|<version>|<msg_type>|<payload>
+Protocol format: advBBS|<version>|<msg_type>|<payload>
 
 Message types:
 - HELLO: Handshake with capabilities
@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class FQ51SyncMessage:
-    """Message format for FQ51 sync."""
+class AdvBBSSyncMessage:
+    """Message format for advBBS sync."""
     uuid: str
     msg_type: str  # "bulletin" or "mail"
     board: Optional[str] = None
@@ -47,11 +47,11 @@ class FQ51SyncMessage:
     origin_bbs: Optional[str] = None
 
 
-class FQ51NativeSync:
+class AdvBBSNativeSync:
     """
-    Native advBBS/FQ51BBS sync via DM (FQ51-compatible protocol).
+    Native advBBS sync via DM (advBBS protocol).
 
-    Protocol format: FQ51|<version>|<msg_type>|<payload>
+    Protocol format: advBBS|<version>|<msg_type>|<payload>
 
     Features:
     - JSON message encoding for structured data
@@ -82,7 +82,7 @@ class FQ51NativeSync:
 
     def __init__(self, sync_manager: "SyncManager"):
         """
-        Initialize FQ51 native sync.
+        Initialize advBBS native sync.
 
         Args:
             sync_manager: Parent sync manager instance
@@ -128,9 +128,9 @@ class FQ51NativeSync:
         hello = self._format_message(self.MSG_HELLO, f"{self.my_callsign}:{self.my_name}|{capabilities}")
         await self._send_dm(peer_id, hello)
 
-        logger.info(f"Initiated FQ51 sync with {peer_id}")
+        logger.info(f"Initiated advBBS sync with {peer_id}")
 
-    async def send_sync_message(self, msg: FQ51SyncMessage, peer_id: str):
+    async def send_sync_message(self, msg: AdvBBSSyncMessage, peer_id: str):
         """
         Send message using SYNC_MSG format.
 
@@ -146,17 +146,17 @@ class FQ51NativeSync:
 
             if self.mesh:
                 await self.mesh.send_dm(sync_msg, peer_id)
-                logger.debug(f"Sent FQ51 SYNC_MSG to {peer_id}: {msg.uuid[:8]}")
+                logger.debug(f"Sent advBBS SYNC_MSG to {peer_id}: {msg.uuid[:8]}")
 
         except Exception as e:
-            logger.error(f"Failed to send FQ51 sync message: {e}")
+            logger.error(f"Failed to send advBBS sync message: {e}")
 
     async def send_sync_ack(self, uuid: str, peer_id: str):
         """Send acknowledgment for received message."""
         ack = self._format_message(self.MSG_SYNC_ACK, uuid)
         if self.mesh:
             await self.mesh.send_dm(ack, peer_id)
-            logger.debug(f"Sent FQ51 SYNC_ACK to {peer_id}: {uuid[:8]}")
+            logger.debug(f"Sent advBBS SYNC_ACK to {peer_id}: {uuid[:8]}")
 
     async def send_sync_done(self, peer_id: str):
         """Signal sync completion."""
@@ -164,22 +164,22 @@ class FQ51NativeSync:
         done = self._format_message(self.MSG_SYNC_DONE, str(count))
         if self.mesh:
             await self.mesh.send_dm(done, peer_id)
-            logger.debug(f"Sent FQ51 SYNC_DONE to {peer_id}: {count} messages")
+            logger.debug(f"Sent advBBS SYNC_DONE to {peer_id}: {count} messages")
 
     async def send_delete(self, uuid: str, peer_id: str):
         """Send delete request for message."""
         delete = self._format_message(self.MSG_DELETE, uuid)
         if self.mesh:
             await self.mesh.send_dm(delete, peer_id)
-            logger.debug(f"Sent FQ51 DELETE to {peer_id}: {uuid[:8]}")
+            logger.debug(f"Sent advBBS DELETE to {peer_id}: {uuid[:8]}")
 
     def handle_message(self, raw: str, sender: str) -> bool:
         """
-        Handle incoming FQ51 protocol message.
+        Handle incoming advBBS protocol message.
 
         Returns True if handled, False otherwise.
         """
-        if not raw.startswith("FQ51|"):
+        if not raw.startswith("advBBS|"):
             return False
 
         parts = raw.split("|", 3)
@@ -193,7 +193,7 @@ class FQ51NativeSync:
         if msg_type not in self.VALID_TYPES:
             return False
 
-        logger.debug(f"Received FQ51 {msg_type} from {sender}")
+        logger.debug(f"Received advBBS {msg_type} from {sender}")
 
         handlers = {
             self.MSG_HELLO: self._handle_hello,
@@ -213,7 +213,7 @@ class FQ51NativeSync:
             try:
                 handler(payload, sender)
             except Exception as e:
-                logger.error(f"Error handling FQ51 {msg_type}: {e}")
+                logger.error(f"Error handling advBBS {msg_type}: {e}")
 
         return True
 
@@ -230,7 +230,7 @@ class FQ51NativeSync:
             peer_callsign = peer_info
             peer_name = peer_info
 
-        logger.info(f"FQ51 handshake from {peer_name} ({peer_callsign}) [{sender}]: {capabilities}")
+        logger.info(f"advBBS handshake from {peer_name} ({peer_callsign}) [{sender}]: {capabilities}")
 
         # Update peer in database
         self._register_peer(sender, peer_callsign, peer_name, capabilities)
@@ -260,7 +260,7 @@ class FQ51NativeSync:
 
         capabilities = parts[1].split(",") if len(parts) > 1 else ["mail"]
 
-        logger.info(f"FQ51 sync request from {sender}: since={since_us}, types={capabilities}")
+        logger.info(f"advBBS sync request from {sender}: since={since_us}, types={capabilities}")
         # Bulletin sync removed - mail is handled via MAILREQ/MAILDAT protocol
 
     def _handle_sync_message(self, payload: str, sender: str):
@@ -270,9 +270,9 @@ class FQ51NativeSync:
             json_str = base64.b64decode(payload).decode()
             msg_dict = json.loads(json_str)
 
-            msg = FQ51SyncMessage(**msg_dict)
+            msg = AdvBBSSyncMessage(**msg_dict)
 
-            logger.debug(f"Received FQ51 sync message from {sender}: {msg.uuid[:8]}")
+            logger.debug(f"Received advBBS sync message from {sender}: {msg.uuid[:8]}")
 
             # Store the message
             self._store_sync_message(msg, sender)
@@ -289,13 +289,13 @@ class FQ51NativeSync:
                 logger.error(f"Failed to send sync ACK: {e}")
 
         except Exception as e:
-            logger.error(f"Failed to parse FQ51 sync message: {e}")
+            logger.error(f"Failed to parse advBBS sync message: {e}")
 
     def _handle_sync_ack(self, payload: str, sender: str):
         """Handle sync acknowledgment."""
         uuid = payload.strip()
 
-        logger.debug(f"Received FQ51 SYNC_ACK from {sender}: {uuid[:8] if uuid else 'empty'}")
+        logger.debug(f"Received advBBS SYNC_ACK from {sender}: {uuid[:8] if uuid else 'empty'}")
 
         # Mark sync as complete
         if uuid in self._pending_acks:
@@ -314,7 +314,7 @@ class FQ51NativeSync:
         except ValueError:
             count = 0
 
-        logger.info(f"FQ51 sync complete from {sender}: {count} messages")
+        logger.info(f"advBBS sync complete from {sender}: {count} messages")
 
         # Update peer sync timestamp
         now_us = int(time.time() * 1_000_000)
@@ -338,11 +338,11 @@ class FQ51NativeSync:
         # Only delete if message originated from requesting peer's BBS
         if message and message.origin_bbs == sender:
             msg_repo.delete_message(message.id)
-            logger.info(f"Deleted message by FQ51 request from {sender}: {uuid[:8]}")
+            logger.info(f"Deleted message by advBBS request from {sender}: {uuid[:8]}")
         else:
             logger.warning(f"Rejected delete request from {sender} for {uuid[:8]}: not origin BBS")
 
-    def _store_sync_message(self, msg: FQ51SyncMessage, sender: str):
+    def _store_sync_message(self, msg: AdvBBSSyncMessage, sender: str):
         """Store received sync message - mail only, bulletin sync disabled."""
         from ...db.messages import MessageRepository
         from ...db.users import NodeRepository
@@ -357,7 +357,7 @@ class FQ51NativeSync:
 
         # Check for duplicate
         if msg_repo.message_exists(msg.uuid):
-            logger.debug(f"Duplicate FQ51 message ignored: {msg.uuid[:8]}")
+            logger.debug(f"Duplicate advBBS message ignored: {msg.uuid[:8]}")
             return
 
         # Get sender node
@@ -370,7 +370,7 @@ class FQ51NativeSync:
 
             recipient = user_repo.get_user_by_username(msg.recipient) if msg.recipient else None
             if not recipient:
-                logger.warning(f"FQ51 mail recipient not found: {msg.recipient}")
+                logger.warning(f"advBBS mail recipient not found: {msg.recipient}")
                 return
 
             # Encrypt for recipient
@@ -378,7 +378,7 @@ class FQ51NativeSync:
             subject_enc = self._encrypt_for_recipient(msg.subject, recipient) if msg.subject else None
 
             if body_enc is None:
-                logger.error(f"Failed to encrypt FQ51 mail for {msg.recipient}")
+                logger.error(f"Failed to encrypt advBBS mail for {msg.recipient}")
                 return
 
             from ...db.models import MessageType
@@ -393,20 +393,20 @@ class FQ51NativeSync:
             )
 
             self._log_sync(msg.uuid, sender, "received")
-            logger.info(f"Stored FQ51 mail from {sender} to {msg.recipient}: {msg.uuid[:8]}")
+            logger.info(f"Stored advBBS mail from {sender} to {msg.recipient}: {msg.uuid[:8]}")
 
     def _format_message(self, msg_type: str, payload: str) -> str:
         """Format a protocol message."""
-        return f"FQ51|{self.VERSION}|{msg_type}|{payload}"
+        return f"advBBS|{self.VERSION}|{msg_type}|{payload}"
 
     async def _send_dm(self, peer_id: str, message: str):
         """Send direct message to peer."""
         if self.mesh:
             await self.mesh.send_dm(message, peer_id)
 
-    def is_fq51_message(self, raw: str) -> bool:
-        """Check if message is FQ51 format."""
-        if not raw.startswith("FQ51|"):
+    def is_advbbs_message(self, raw: str) -> bool:
+        """Check if message is advBBS format."""
+        if not raw.startswith("advBBS|"):
             return False
         parts = raw.split("|", 3)
         if len(parts) < 3:
@@ -437,7 +437,7 @@ class FQ51NativeSync:
 
         if not peer_row:
             cursor = self.db.execute(
-                "INSERT INTO bbs_peers (node_id, protocol, last_sync_us) VALUES (?, 'fq51', ?)",
+                "INSERT INTO bbs_peers (node_id, protocol, last_sync_us) VALUES (?, 'advbbs', ?)",
                 (peer_node_id, now_us)
             )
             peer_id = cursor.lastrowid
@@ -468,7 +468,7 @@ class FQ51NativeSync:
         if not peer_row:
             self.db.execute("""
                 INSERT INTO bbs_peers (node_id, callsign, name, protocol, capabilities, last_seen_us)
-                VALUES (?, ?, ?, 'fq51', ?, ?)
+                VALUES (?, ?, ?, 'advbbs', ?, ?)
             """, (node_id, callsign, name, caps_str, now_us))
         else:
             self.db.execute("""
@@ -511,7 +511,7 @@ class FQ51NativeSync:
         """
         Send RAP_PING heartbeat to peer.
 
-        Format: FQ51|1|RAP_PING|timestamp_us
+        Format: advBBS|1|RAP_PING|timestamp_us
         """
         timestamp_us = int(time.time() * 1_000_000)
         ping = self._format_message(self.MSG_RAP_PING, str(timestamp_us))
@@ -523,7 +523,7 @@ class FQ51NativeSync:
         """
         Send RAP_PONG response to peer.
 
-        Format: FQ51|1|RAP_PONG|ping_ts|route1;route2;...
+        Format: advBBS|1|RAP_PONG|ping_ts|route1;route2;...
         Each route: bbs_name:hop_count:quality_score
         """
         routes = self._get_route_table_string()
@@ -537,7 +537,7 @@ class FQ51NativeSync:
         """
         Send full route table advertisement to peer.
 
-        Format: FQ51|1|RAP_ROUTES|route1;route2;...
+        Format: advBBS|1|RAP_ROUTES|route1;route2;...
         """
         routes = self._get_route_table_string()
         msg = self._format_message(self.MSG_RAP_ROUTES, routes)
@@ -748,7 +748,7 @@ class FQ51NativeSync:
             # Create peer entry if doesn't exist
             self.db.execute("""
                 INSERT INTO bbs_peers (node_id, protocol, health_status, last_seen_us)
-                VALUES (?, 'fq51', ?, ?)
+                VALUES (?, 'advbbs', ?, ?)
             """, (node_id, new_status, now_us))
             logger.info(f"Peer {node_id} registered with status: {new_status}")
             return

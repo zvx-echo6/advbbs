@@ -659,7 +659,7 @@ class ConfigTool:
                         str(i),
                         peer.get("name", "Unknown"),
                         peer.get("node_id", ""),
-                        peer.get("protocol", "fq51")
+                        peer.get("protocol", "advbbs")
                     )
                 console.print(peer_table)
                 console.print()
@@ -698,7 +698,7 @@ class ConfigTool:
 
             if peers:
                 for i, peer in enumerate(peers, 1):
-                    console.print(f"[cyan]{i}.[/cyan] {peer.get('name', 'Unknown')} ({peer.get('node_id', '')}) [{peer.get('protocol', 'fq51')}]")
+                    console.print(f"[cyan]{i}.[/cyan] {peer.get('name', 'Unknown')} ({peer.get('node_id', '')}) [{peer.get('protocol', 'advbbs')}]")
                 console.print()
             else:
                 console.print("[dim]No peers configured[/dim]")
@@ -737,12 +737,12 @@ class ConfigTool:
         if not name:
             return
 
-        console.print("\n[cyan]1.[/cyan] fq51 - advBBS native")
+        console.print("\n[cyan]1.[/cyan] advbbs - advBBS native")
         console.print("[cyan]2.[/cyan] tc2 - TC2-BBS")
         console.print("[cyan]3.[/cyan] meshing-around - Meshing-Around BBS")
         protocol_choice = IntPrompt.ask("Protocol", default=1)
-        protocol_map = {1: "fq51", 2: "tc2", 3: "meshing-around"}
-        protocol = protocol_map.get(protocol_choice, "fq51")
+        protocol_map = {1: "advbbs", 2: "tc2", 3: "meshing-around"}
+        protocol = protocol_map.get(protocol_choice, "advbbs")
 
         peer = {
             "node_id": node_id,
@@ -794,16 +794,16 @@ class ConfigTool:
         node_id = Prompt.ask("Node ID", default=peer.get("node_id", ""))
         name = Prompt.ask("Name", default=peer.get("name", ""))
 
-        console.print("\n[cyan]1.[/cyan] fq51  [cyan]2.[/cyan] tc2  [cyan]3.[/cyan] meshing-around")
-        protocol_map = {"fq51": 1, "tc2": 2, "meshing-around": 3}
-        current_proto = protocol_map.get(peer.get("protocol", "fq51"), 1)
+        console.print("\n[cyan]1.[/cyan] advbbs  [cyan]2.[/cyan] tc2  [cyan]3.[/cyan] meshing-around")
+        protocol_map = {"advbbs": 1, "tc2": 2, "meshing-around": 3}
+        current_proto = protocol_map.get(peer.get("protocol", "advbbs"), 1)
         protocol_choice = IntPrompt.ask("Protocol", default=current_proto)
-        protocol_reverse = {1: "fq51", 2: "tc2", 3: "meshing-around"}
+        protocol_reverse = {1: "advbbs", 2: "tc2", 3: "meshing-around"}
 
         peers[idx] = {
             "node_id": node_id,
             "name": name,
-            "protocol": protocol_reverse.get(protocol_choice, "fq51"),
+            "protocol": protocol_reverse.get(protocol_choice, "advbbs"),
             "enabled": peer.get("enabled", True),
         }
         self._set("sync", "peers", peers)

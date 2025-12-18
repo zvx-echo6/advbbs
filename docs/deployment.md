@@ -173,7 +173,7 @@ enabled = true
 [[sync.peers]]
 node_id = "!abc12345"
 name = "REMOTE1"
-protocol = "fq51"
+protocol = "advbbs"
 enabled = true
 ```
 

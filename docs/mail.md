@@ -197,13 +197,13 @@ MAILDLV|<uuid>|OK|<recipient>@<bbs>
 User on FQ51 sends: !send alice@REMOTE2 Hello!
 
 1. FQ51 creates MAILREQ:
-   MAILREQ|550e8400...|bob|FQ51|alice|REMOTE2|1|1|FQ51
+   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|1|1|FQ51
 
 2. FQ51 doesn't know REMOTE2 directly, but knows REMOTE1
    Forwards to REMOTE1
 
 3. REMOTE1 receives MAILREQ, adds itself to route:
-   MAILREQ|550e8400...|bob|FQ51|alice|REMOTE2|2|1|FQ51,REMOTE1
+   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|2|1|FQ51,REMOTE1
    Forwards to REMOTE2
 
 4. REMOTE2 receives MAILREQ:

@@ -1,7 +1,7 @@
 """
 advBBS Sync Manager
 
-Coordinates inter-BBS synchronization using FQ51-compatible native protocol.
+Coordinates inter-BBS synchronization using advBBS native protocol.
 """
 
 import asyncio
@@ -10,7 +10,7 @@ import time
 from typing import Optional, TYPE_CHECKING
 
 from ..config import SyncConfig
-from .compat.fq51_native import FQ51NativeSync
+from .compat.advbbs_native import AdvBBSNativeSync
 
 if TYPE_CHECKING:
     from ..core.bbs import advBBS
@@ -22,7 +22,7 @@ class SyncManager:
     """
     Manages synchronization with peer BBS nodes.
 
-    Uses FQ51 native DM-based protocol (JSON/base64) for sync.
+    Uses advBBS native DM-based protocol (JSON/base64) for sync.
 
     Features:
     - Rate-limited sync to prevent mesh flooding
@@ -74,7 +74,7 @@ class SyncManager:
         self._maildlv_max_attempts = 3
 
         # Protocol handler
-        self._fq51 = FQ51NativeSync(self)
+        self._native = AdvBBSNativeSync(self)
 
         # Protocol response delay (avoid TX queue collision)
         self._protocol_delay = 2.5
@@ -149,9 +149,9 @@ class SyncManager:
         )
 
     @property
-    def fq51_handler(self) -> FQ51NativeSync:
-        """Get FQ51 native protocol handler."""
-        return self._fq51
+    def native_handler(self) -> AdvBBSNativeSync:
+        """Get native protocol handler."""
+        return self._native
 
     async def tick(self):
         """
@@ -217,14 +217,14 @@ class SyncManager:
             logger.info("Scheduled bulletin sync complete")
 
     async def _sync_with_peer(self, node_id: str, protocol: str):
-        """Sync with a specific peer using FQ51 protocol."""
+        """Sync with a specific peer using advBBS protocol."""
         logger.debug(f"Syncing with {node_id}")
 
         # Get last sync timestamp for this peer
         since_us = self._get_last_sync_time(node_id)
 
-        # Only FQ51 native protocol is supported
-        await self._fq51.sync_bulletins_to_peer(node_id, since_us)
+        # Only advBBS native protocol is supported
+        await self._native.sync_bulletins_to_peer(node_id, since_us)
 
     def _get_last_sync_time(self, node_id: str) -> int:
         """Get last sync timestamp for peer in microseconds."""
@@ -260,21 +260,21 @@ class SyncManager:
             await self._sync_with_peer(node_id, protocol)
         elif op_type == "delete":
             uuid = sync_op.get("uuid")
-            await self._fq51.send_delete(uuid, node_id)
+            await self._native.send_delete(uuid, node_id)
 
     async def _cleanup_pending_acks(self):
         """Clean up stale pending ACKs (older than 10 minutes)."""
         now = time.time()
         timeout = 600  # 10 minutes
 
-        # Clean FQ51 pending ACKs
-        stale_fq51 = [
-            uuid for uuid, (_, ts) in self._fq51._pending_acks.items()
+        # Clean advBBS pending ACKs
+        stale_native = [
+            uuid for uuid, (_, ts) in self._native._pending_acks.items()
             if now - ts > timeout
         ]
-        for uuid in stale_fq51:
-            del self._fq51._pending_acks[uuid]
-            logger.warning(f"FQ51 ACK timeout for {uuid[:8]}")
+        for uuid in stale_native:
+            del self._native._pending_acks[uuid]
+            logger.warning(f"advBBS ACK timeout for {uuid[:8]}")
 
     async def _retry_pending_mailreq(self):
         """Retry pending MAILREQ messages that haven't received MAILACK."""
@@ -445,9 +445,9 @@ class SyncManager:
             if self.handle_mail_protocol(message, sender):
                 return True
 
-        # Handle FQ51 native protocol
-        if self._fq51.is_fq51_message(message):
-            return self._fq51.handle_message(message, sender)
+        # Handle advBBS native protocol
+        if self._native.is_advbbs_message(message):
+            return self._native.handle_message(message, sender)
 
         return False
 
@@ -551,7 +551,7 @@ class SyncManager:
             "total_peers": self.total_peer_count,
             "online_peers": self.online_peer_count,
             "pending_syncs": len(self._pending_syncs),
-            "pending_acks": len(self._fq51._pending_acks),
+            "pending_acks": len(self._native._pending_acks),
             "sync_enabled": self.config.enabled,
         }
 
@@ -1196,7 +1196,7 @@ class SyncManager:
                 continue
 
             try:
-                await self._fq51.send_rap_ping(node_id)
+                await self._native.send_rap_ping(node_id)
                 self._pending_pings[node_id] = now
             except Exception as e:
                 logger.error(f"Failed to send RAP_PING to {node_id}: {e}")
@@ -1242,7 +1242,7 @@ class SyncManager:
                 # Trigger state change callback if status changed
                 if new_status != current_status:
                     logger.warning(f"Peer {node_id} health: {current_status} -> {new_status} (failed={failed})")
-                    self._fq51._on_peer_state_change(node_id, current_status, new_status)
+                    self._native._on_peer_state_change(node_id, current_status, new_status)
 
     async def _share_route_table(self):
         """Share full route table with all peers."""
@@ -1253,7 +1253,7 @@ class SyncManager:
                 continue
 
             try:
-                await self._fq51.send_rap_routes(node_id)
+                await self._native.send_rap_routes(node_id)
             except Exception as e:
                 logger.error(f"Failed to send RAP_ROUTES to {node_id}: {e}")
 

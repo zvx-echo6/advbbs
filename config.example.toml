@@ -59,7 +59,7 @@ auto_sync_interval_minutes = 60
 # [[sync.peers]]
 # node_id = "!abc12345"
 # name = "Remote-BBS-1"
-# protocol = "fq51"                # fq51 | tc2 | meshing-around
+# protocol = "advbbs"                # advbbs | tc2 | meshing-around
 
 bulletin_sync_interval_minutes = 60
 mail_delivery_mode = "instant"     # instant | batched

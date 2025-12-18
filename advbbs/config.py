@@ -97,7 +97,7 @@ class SyncPeer:
     """Single sync peer configuration."""
     node_id: str
     name: str
-    protocol: str  # fq51
+    protocol: str  # advbbs
     enabled: bool = True  # Enable/disable this peer
     # Protocol-specific settings
     use_channel: bool = False  # If True, use channel broadcast instead of DM
@@ -235,7 +235,7 @@ class Config:
 
         # Sync peer validation
         for peer in self.sync.peers:
-            if peer.protocol not in ["tc2", "meshing-around", "fq51"]:
+            if peer.protocol not in ["tc2", "meshing-around", "advbbs"]:
                 errors.append(f"Invalid protocol '{peer.protocol}' for peer {peer.name}")
 
         return errors

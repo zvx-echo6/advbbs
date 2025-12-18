@@ -117,7 +117,7 @@ SYNC_BOARDS = ["general", "help"]
 
 ### How Sync Works
 
-1. BBS nodes periodically exchange bulletins via FQ51 protocol
+1. BBS nodes periodically exchange bulletins via advBBS protocol
 2. Each post has a UUID for deduplication
 3. Content is decrypted, transmitted, and re-encrypted at destination
 4. Posts from unknown boards are mapped to `general`

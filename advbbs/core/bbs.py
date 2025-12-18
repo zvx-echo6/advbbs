@@ -315,7 +315,7 @@ class advBBS:
             self._handle_repeater_mode(packet)
             return
 
-        # Check for sync/peer protocol messages (MAILREQ, MAILACK, FQ51|, etc.)
+        # Check for sync/peer protocol messages (MAILREQ, MAILACK, advBBS|, etc.)
         if self.sync_manager:
             is_peer = self.sync_manager.is_peer(sender)
             logger.info(f"Peer check: sender={sender}, is_peer={is_peer}, text_start={text[:60]}")
