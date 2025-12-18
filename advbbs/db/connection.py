@@ -80,6 +80,7 @@ class Database:
         migrations = [
             ("001_initial", self._migration_001_initial),
             ("002_settings_and_maintenance", self._migration_002_settings),
+            ("003_rap", self._migration_003_rap),
         ]
 
         for name, func in migrations:
@@ -326,4 +327,61 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(deleted_at_us);
             CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(msg_type);
             CREATE INDEX IF NOT EXISTS idx_sync_log_attempt ON sync_log(last_attempt_us);
+        """)
+
+    def _migration_003_rap(self):
+        """Add RAP (Route Announcement Protocol) tables and columns."""
+        # First, add columns to bbs_peers table (ignore errors if already exist)
+        alter_statements = [
+            "ALTER TABLE bbs_peers ADD COLUMN health_status TEXT DEFAULT 'unknown'",
+            "ALTER TABLE bbs_peers ADD COLUMN failed_heartbeats INTEGER DEFAULT 0",
+            "ALTER TABLE bbs_peers ADD COLUMN last_heartbeat_us INTEGER",
+            "ALTER TABLE bbs_peers ADD COLUMN last_pong_us INTEGER",
+            "ALTER TABLE bbs_peers ADD COLUMN quality_score REAL DEFAULT 1.0",
+        ]
+
+        for stmt in alter_statements:
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        # Now create RAP tables
+        self._conn.executescript("""
+            -- RAP Routes table (route discovery)
+            CREATE TABLE IF NOT EXISTS rap_routes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dest_bbs TEXT NOT NULL,
+                via_peer_id INTEGER NOT NULL,
+                hop_count INTEGER NOT NULL DEFAULT 1,
+                quality_score REAL DEFAULT 1.0,
+                last_updated_us INTEGER NOT NULL,
+                expires_at_us INTEGER NOT NULL,
+                UNIQUE(dest_bbs, via_peer_id),
+                FOREIGN KEY (via_peer_id) REFERENCES bbs_peers(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_rap_routes_dest ON rap_routes(dest_bbs);
+            CREATE INDEX IF NOT EXISTS idx_rap_routes_expires ON rap_routes(expires_at_us);
+            CREATE INDEX IF NOT EXISTS idx_rap_routes_peer ON rap_routes(via_peer_id);
+
+            -- RAP Pending Mail table (queue for offline routes)
+            CREATE TABLE IF NOT EXISTS rap_pending_mail (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mail_uuid TEXT UNIQUE NOT NULL,
+                sender_user_id INTEGER NOT NULL,
+                sender_username TEXT NOT NULL,
+                sender_bbs TEXT NOT NULL,
+                recipient_username TEXT NOT NULL,
+                recipient_bbs TEXT NOT NULL,
+                subject_enc BLOB,
+                body_enc BLOB NOT NULL,
+                queued_at_us INTEGER NOT NULL,
+                expires_at_us INTEGER NOT NULL,
+                retry_count INTEGER DEFAULT 0,
+                last_retry_us INTEGER,
+                last_status TEXT,
+                FOREIGN KEY (sender_user_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_rap_pending_dest ON rap_pending_mail(recipient_bbs);
+            CREATE INDEX IF NOT EXISTS idx_rap_pending_expires ON rap_pending_mail(expires_at_us);
         """)
