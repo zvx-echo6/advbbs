@@ -203,6 +203,9 @@ class advBBS:
         # Send startup announcement if configured
         if self.config.bbs.announcements_enabled and self.config.bbs.announcement_interval_hours > 0:
             await self._announce()
+            # Update maintenance timestamp to prevent duplicate announcement
+            if self.maintenance:
+                self.maintenance._last_announcement = time.time()
 
         # Main loop
         while self.running:
