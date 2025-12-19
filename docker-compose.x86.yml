@@ -8,6 +8,16 @@
 #   docker compose logs -f                # View logs
 #
 # Web config: http://localhost:7681
+#
+# Environment variables (set these to customize initial config):
+#   ADVBBS_NAME          - BBS name (default: advBBS)
+#   ADVBBS_CALLSIGN      - BBS callsign (default: ADVBBS)
+#   ADVBBS_ADMIN_PASS    - Admin password (default: changeme)
+#   TZ                   - Timezone (default: UTC)
+#   ADVBBS_CONNECTION    - Connection type: serial, tcp (default: serial)
+#   ADVBBS_SERIAL_PORT   - Serial port (default: /dev/ttyUSB0)
+#   ADVBBS_TCP_HOST      - TCP host if using tcp connection
+#   ADVBBS_TCP_PORT      - TCP port if using tcp connection (default: 4403)
 
 services:
   advbbs:
@@ -36,7 +46,16 @@ services:
 
     environment:
       - advBBS_CONFIG=/data/config.toml
-      - TZ=America/Boise
+      # Customize these for your BBS:
+      - TZ=${TZ:-UTC}
+      - ADVBBS_NAME=${ADVBBS_NAME:-advBBS}
+      - ADVBBS_CALLSIGN=${ADVBBS_CALLSIGN:-ADVBBS}
+      - ADVBBS_ADMIN_PASS=${ADVBBS_ADMIN_PASS:-changeme}
+      - ADVBBS_CONNECTION=${ADVBBS_CONNECTION:-serial}
+      - ADVBBS_SERIAL_PORT=${ADVBBS_SERIAL_PORT:-/dev/ttyUSB0}
+      - ADVBBS_TCP_HOST=${ADVBBS_TCP_HOST:-localhost}
+      - ADVBBS_TCP_PORT=${ADVBBS_TCP_PORT:-4403}
+      - ADVBBS_MODE=${ADVBBS_MODE:-full}
 
     extra_hosts:
       - "host.docker.internal:host-gateway"

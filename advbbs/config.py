@@ -2,8 +2,22 @@
 advBBS Configuration Module
 
 Handles loading, validation, and management of configuration settings.
+
+Environment variables can be used as fallbacks for missing config values:
+  ADVBBS_NAME          - BBS name
+  ADVBBS_CALLSIGN      - BBS callsign
+  ADVBBS_ADMIN_PASS    - Admin password
+  ADVBBS_MOTD          - Message of the day
+  TZ                   - Timezone
+  ADVBBS_CONNECTION    - Meshtastic connection type (serial, tcp, ble)
+  ADVBBS_SERIAL_PORT   - Serial port
+  ADVBBS_TCP_HOST      - TCP host for Meshtastic
+  ADVBBS_TCP_PORT      - TCP port for Meshtastic
+  ADVBBS_MODE          - Operating mode (full, mail_only, boards_only, repeater)
+  ADVBBS_LOG_LEVEL     - Logging level (DEBUG, INFO, WARNING, ERROR)
 """
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +33,23 @@ else:
         raise ImportError("Please install tomli: pip install tomli")
 
 
+# Environment variable to config field mapping
+# Format: (env_var, config_section, config_field, type_converter)
+ENV_VAR_MAPPING = [
+    ("ADVBBS_NAME", "bbs", "name", str),
+    ("ADVBBS_CALLSIGN", "bbs", "callsign", str),
+    ("ADVBBS_ADMIN_PASS", "bbs", "admin_password", str),
+    ("ADVBBS_MOTD", "bbs", "motd", str),
+    ("TZ", "bbs", "timezone", str),
+    ("ADVBBS_CONNECTION", "meshtastic", "connection_type", str),
+    ("ADVBBS_SERIAL_PORT", "meshtastic", "serial_port", str),
+    ("ADVBBS_TCP_HOST", "meshtastic", "tcp_host", str),
+    ("ADVBBS_TCP_PORT", "meshtastic", "tcp_port", int),
+    ("ADVBBS_MODE", "operating_mode", "mode", str),
+    ("ADVBBS_LOG_LEVEL", "logging", "level", str),
+]
+
+
 @dataclass
 class BBSConfig:
     """BBS general settings."""
@@ -26,7 +57,7 @@ class BBSConfig:
     callsign: str = "ADV"
     admin_password: str = "changeme"
     motd: str = "Welcome to advBBS!"
-    timezone: str = "America/Boise"  # Timezone for display (e.g., America/New_York, UTC)
+    timezone: str = "UTC"  # Timezone for display (e.g., America/New_York, UTC)
     max_message_age_days: int = 30
     announcement_interval_hours: int = 12
     announcements_enabled: bool = True  # Enable/disable periodic announcements
@@ -282,59 +313,112 @@ def _coerce_types(data: dict, dataclass_type) -> dict:
     return result
 
 
+def _apply_env_fallbacks(config: "Config", loaded_sections: set[str]) -> None:
+    """
+    Apply environment variable fallbacks for missing config values.
+
+    Only applies if the config section/field was not explicitly set in the config file.
+    Config file values always take precedence.
+    """
+    for env_var, section, field_name, type_converter in ENV_VAR_MAPPING:
+        env_value = os.environ.get(env_var)
+        if env_value is None:
+            continue
+
+        # Get the config section object
+        section_obj = getattr(config, section, None)
+        if section_obj is None:
+            continue
+
+        # Only apply env var if this field uses the default value
+        # (i.e., wasn't explicitly set in the config file)
+        current_value = getattr(section_obj, field_name, None)
+        default_obj = type(section_obj)()
+        default_value = getattr(default_obj, field_name, None)
+
+        # If current value equals default, apply env var
+        if current_value == default_value:
+            try:
+                converted_value = type_converter(env_value)
+                setattr(section_obj, field_name, converted_value)
+            except (ValueError, TypeError):
+                # If conversion fails, skip this env var
+                pass
+
+
 def load_config(path: Path) -> Config:
-    """Load configuration from TOML file."""
+    """
+    Load configuration from TOML file.
+
+    Environment variables are used as fallbacks for any values not
+    explicitly set in the config file. Config file always takes precedence.
+    """
     config = Config()
+    loaded_sections: set[str] = set()
 
-    if not path.exists():
-        return config
+    if path.exists():
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
 
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
+        # Map TOML sections to config dataclasses
+        if "bbs" in data:
+            config.bbs = BBSConfig(**_coerce_types(data["bbs"], BBSConfig))
+            loaded_sections.add("bbs")
 
-    # Map TOML sections to config dataclasses
-    if "bbs" in data:
-        config.bbs = BBSConfig(**_coerce_types(data["bbs"], BBSConfig))
+        if "database" in data:
+            config.database = DatabaseConfig(**_coerce_types(data["database"], DatabaseConfig))
+            loaded_sections.add("database")
 
-    if "database" in data:
-        config.database = DatabaseConfig(**_coerce_types(data["database"], DatabaseConfig))
+        if "meshtastic" in data:
+            config.meshtastic = MeshtasticConfig(**_coerce_types(data["meshtastic"], MeshtasticConfig))
+            loaded_sections.add("meshtastic")
 
-    if "meshtastic" in data:
-        config.meshtastic = MeshtasticConfig(**_coerce_types(data["meshtastic"], MeshtasticConfig))
+        if "crypto" in data:
+            config.crypto = CryptoConfig(**_coerce_types(data["crypto"], CryptoConfig))
+            loaded_sections.add("crypto")
 
-    if "crypto" in data:
-        config.crypto = CryptoConfig(**_coerce_types(data["crypto"], CryptoConfig))
+        if "features" in data:
+            config.features = FeaturesConfig(**_coerce_types(data["features"], FeaturesConfig))
+            loaded_sections.add("features")
 
-    if "features" in data:
-        config.features = FeaturesConfig(**_coerce_types(data["features"], FeaturesConfig))
+        if "operating_mode" in data:
+            config.operating_mode = OperatingModeConfig(**_coerce_types(data["operating_mode"], OperatingModeConfig))
+            loaded_sections.add("operating_mode")
 
-    if "operating_mode" in data:
-        config.operating_mode = OperatingModeConfig(**_coerce_types(data["operating_mode"], OperatingModeConfig))
+        if "repeater" in data:
+            config.repeater = RepeaterConfig(**_coerce_types(data["repeater"], RepeaterConfig))
+            loaded_sections.add("repeater")
 
-    if "repeater" in data:
-        config.repeater = RepeaterConfig(**_coerce_types(data["repeater"], RepeaterConfig))
+        if "sync" in data:
+            sync_data = data["sync"].copy()
+            peers = []
+            for peer_data in sync_data.pop("peers", []):
+                peers.append(SyncPeer(**peer_data))
+            config.sync = SyncConfig(**_coerce_types(sync_data, SyncConfig), peers=peers)
+            loaded_sections.add("sync")
 
-    if "sync" in data:
-        sync_data = data["sync"].copy()
-        peers = []
-        for peer_data in sync_data.pop("peers", []):
-            peers.append(SyncPeer(**peer_data))
-        config.sync = SyncConfig(**_coerce_types(sync_data, SyncConfig), peers=peers)
+        if "admin_channel" in data:
+            config.admin_channel = AdminChannelConfig(**_coerce_types(data["admin_channel"], AdminChannelConfig))
+            loaded_sections.add("admin_channel")
 
-    if "admin_channel" in data:
-        config.admin_channel = AdminChannelConfig(**_coerce_types(data["admin_channel"], AdminChannelConfig))
+        if "rate_limits" in data:
+            config.rate_limits = RateLimitsConfig(**_coerce_types(data["rate_limits"], RateLimitsConfig))
+            loaded_sections.add("rate_limits")
 
-    if "rate_limits" in data:
-        config.rate_limits = RateLimitsConfig(**_coerce_types(data["rate_limits"], RateLimitsConfig))
+        if "web_reader" in data:
+            config.web_reader = WebReaderConfig(**_coerce_types(data["web_reader"], WebReaderConfig))
+            loaded_sections.add("web_reader")
 
-    if "web_reader" in data:
-        config.web_reader = WebReaderConfig(**_coerce_types(data["web_reader"], WebReaderConfig))
+        if "cli_config" in data:
+            config.cli_config = CLIConfigSettings(**_coerce_types(data["cli_config"], CLIConfigSettings))
+            loaded_sections.add("cli_config")
 
-    if "cli_config" in data:
-        config.cli_config = CLIConfigSettings(**_coerce_types(data["cli_config"], CLIConfigSettings))
+        if "logging" in data:
+            config.logging = LoggingConfig(**_coerce_types(data["logging"], LoggingConfig))
+            loaded_sections.add("logging")
 
-    if "logging" in data:
-        config.logging = LoggingConfig(**_coerce_types(data["logging"], LoggingConfig))
+    # Apply environment variable fallbacks for missing values
+    _apply_env_fallbacks(config, loaded_sections)
 
     return config
 

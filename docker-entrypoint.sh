@@ -1,28 +1,42 @@
 #!/bin/bash
 # advBBS Docker Entrypoint
 # Runs ttyd for web config access and the BBS
+#
+# Environment variables for initial config (only used on first run):
+#   ADVBBS_NAME          - BBS name (default: advBBS)
+#   ADVBBS_CALLSIGN      - BBS callsign (default: ADVBBS)
+#   ADVBBS_ADMIN_PASS    - Admin password (default: changeme)
+#   ADVBBS_MOTD          - Message of the day
+#   TZ                   - Timezone (default: UTC)
+#   ADVBBS_CONNECTION    - Meshtastic connection: serial, tcp, ble (default: serial)
+#   ADVBBS_SERIAL_PORT   - Serial port (default: /dev/ttyUSB0)
+#   ADVBBS_TCP_HOST      - TCP host for Meshtastic (default: localhost)
+#   ADVBBS_TCP_PORT      - TCP port for Meshtastic (default: 4403)
+#   ADVBBS_MODE          - Operating mode: full, mail_only, boards_only, repeater (default: full)
 
 export advBBS_CONFIG="/data/config.toml"
 export TERM="${TERM:-xterm-256color}"
 
-# First run - no config exists, create defaults
+# First run - no config exists, create defaults from env vars
 if [ ! -f "$advBBS_CONFIG" ]; then
     mkdir -p /data
-    cat > "$advBBS_CONFIG" << 'EOF'
+    cat > "$advBBS_CONFIG" << EOF
 [bbs]
-name = "advBBS"
-callsign = "FQ51"
-admin_password = "changeme"
-motd = "Welcome to advBBS!"
+name = "${ADVBBS_NAME:-advBBS}"
+callsign = "${ADVBBS_CALLSIGN:-ADVBBS}"
+admin_password = "${ADVBBS_ADMIN_PASS:-changeme}"
+motd = "${ADVBBS_MOTD:-Welcome to advBBS!}"
+timezone = "${TZ:-UTC}"
 
 [database]
 path = "/data/advbbs.db"
 backup_path = "/data/backups"
 
 [meshtastic]
-connection_type = "tcp"
-tcp_host = "localhost"
-tcp_port = 4403
+connection_type = "${ADVBBS_CONNECTION:-serial}"
+serial_port = "${ADVBBS_SERIAL_PORT:-/dev/ttyUSB0}"
+tcp_host = "${ADVBBS_TCP_HOST:-localhost}"
+tcp_port = ${ADVBBS_TCP_PORT:-4403}
 
 [features]
 mail_enabled = true
@@ -31,12 +45,13 @@ sync_enabled = true
 registration_enabled = true
 
 [operating_mode]
-mode = "full"
+mode = "${ADVBBS_MODE:-full}"
 
 [logging]
-level = "INFO"
+level = "${ADVBBS_LOG_LEVEL:-INFO}"
 EOF
-    echo "Default config created. Configure via http://localhost:7681"
+    echo "Default config created from environment variables."
+    echo "Configure via http://localhost:7681"
 fi
 
 # Start ttyd for web-based config access
