@@ -642,6 +642,7 @@ class ConfigTool:
             table.add_row("1. Sync Enabled", self._status_icon(self._get("sync", "enabled", True)))
             table.add_row("2. Sync Interval", f"{self._get('sync', 'auto_sync_interval_minutes', 60)} minutes")
             table.add_row("3. Manage Peers", f"{len(peers)} configured")
+            table.add_row("4. View RAP Routes", "[dim]Route convergence map[/dim]")
 
             console.print(table)
             console.print()
@@ -683,6 +684,169 @@ class ConfigTool:
                 self._set("sync", "auto_sync_interval_minutes", value)
             elif choice == 3:
                 self._manage_peers()
+            elif choice == 4:
+                self._view_rap_routes()
+
+    def _view_rap_routes(self):
+        """Display RAP route convergence table."""
+        self._clear()
+
+        conn = self._get_db_connection()
+        if not conn:
+            console.print("[yellow]Database not available - start BBS first[/yellow]")
+            Prompt.ask("Press Enter to continue")
+            return
+
+        try:
+            # Get peer health status
+            peers = conn.execute("""
+                SELECT id, name, node_id, health_status, failed_heartbeats,
+                       quality_score, last_seen_us
+                FROM bbs_peers
+                ORDER BY name
+            """).fetchall()
+
+            # Get RAP routes
+            routes = conn.execute("""
+                SELECT r.dest_bbs, r.hop_count, r.quality_score,
+                       p.name as via_peer, p.node_id as via_node,
+                       r.last_updated_us, r.expires_at_us
+                FROM rap_routes r
+                JOIN bbs_peers p ON r.via_peer_id = p.id
+                ORDER BY r.hop_count, r.dest_bbs
+            """).fetchall()
+
+            conn.close()
+
+            # Display peer health
+            console.print(Panel("[cyan bold]RAP Network Status[/cyan bold]", expand=False))
+            console.print()
+
+            if peers:
+                peer_table = Table(title="Peer Health", box=box.ROUNDED)
+                peer_table.add_column("Peer", style="cyan")
+                peer_table.add_column("Node ID", style="dim")
+                peer_table.add_column("Status", justify="center")
+                peer_table.add_column("Failed", justify="right")
+                peer_table.add_column("Quality", justify="right")
+                peer_table.add_column("Last Seen", style="dim")
+
+                for peer in peers:
+                    status = peer["health_status"] or "unknown"
+                    if status == "healthy":
+                        status_str = "[green]HEALTHY[/green]"
+                    elif status == "unreachable":
+                        status_str = "[yellow]UNREACHABLE[/yellow]"
+                    elif status == "dead":
+                        status_str = "[red]DEAD[/red]"
+                    else:
+                        status_str = f"[dim]{status}[/dim]"
+
+                    last_seen = peer["last_seen_us"]
+                    if last_seen:
+                        last_seen_dt = datetime.fromtimestamp(last_seen / 1_000_000)
+                        last_seen_str = last_seen_dt.strftime("%m/%d %H:%M")
+                    else:
+                        last_seen_str = "Never"
+
+                    quality = peer["quality_score"] or 0
+                    quality_str = f"{quality:.2f}"
+
+                    peer_table.add_row(
+                        peer["name"],
+                        peer["node_id"],
+                        status_str,
+                        str(peer["failed_heartbeats"] or 0),
+                        quality_str,
+                        last_seen_str
+                    )
+
+                console.print(peer_table)
+            else:
+                console.print("[dim]No peers configured[/dim]")
+
+            console.print()
+
+            # Display route table
+            if routes:
+                route_table = Table(title="RAP Route Table", box=box.ROUNDED)
+                route_table.add_column("Destination", style="cyan")
+                route_table.add_column("Hops", justify="center")
+                route_table.add_column("Via Peer", style="green")
+                route_table.add_column("Quality", justify="right")
+                route_table.add_column("Expires", style="dim")
+
+                now_us = int(datetime.now().timestamp() * 1_000_000)
+
+                for route in routes:
+                    hop_count = route["hop_count"]
+                    if hop_count == 1:
+                        hop_str = "[green]1[/green]"
+                    elif hop_count == 2:
+                        hop_str = "[cyan]2[/cyan]"
+                    elif hop_count <= 4:
+                        hop_str = f"[yellow]{hop_count}[/yellow]"
+                    else:
+                        hop_str = f"[red]{hop_count}[/red]"
+
+                    quality = route["quality_score"] or 0
+                    quality_str = f"{quality:.2f}"
+
+                    expires_us = route["expires_at_us"]
+                    if expires_us:
+                        remaining_s = (expires_us - now_us) / 1_000_000
+                        if remaining_s < 0:
+                            expires_str = "[red]EXPIRED[/red]"
+                        elif remaining_s < 3600:
+                            expires_str = f"{int(remaining_s/60)}m"
+                        else:
+                            expires_str = f"{int(remaining_s/3600)}h"
+                    else:
+                        expires_str = "Unknown"
+
+                    route_table.add_row(
+                        route["dest_bbs"],
+                        hop_str,
+                        route["via_peer"],
+                        quality_str,
+                        expires_str
+                    )
+
+                console.print(route_table)
+
+                # Show route map visualization
+                console.print()
+                console.print("[cyan]Route Map:[/cyan]")
+                my_callsign = self._get("bbs", "callsign", "ADV")
+
+                # Group routes by hop count
+                by_hop = {}
+                for route in routes:
+                    hop = route["hop_count"]
+                    if hop not in by_hop:
+                        by_hop[hop] = []
+                    by_hop[hop].append(route["dest_bbs"])
+
+                # Draw simple ASCII map
+                console.print(f"  [green]{my_callsign}[/green] (this BBS)")
+                for hop in sorted(by_hop.keys()):
+                    prefix = "  " + "  │" * (hop - 1) + "  ├─"
+                    for dest in by_hop[hop]:
+                        console.print(f"{prefix} [cyan]{dest}[/cyan] ({hop} hop{'s' if hop > 1 else ''})")
+
+            else:
+                console.print("[dim]No routes discovered yet[/dim]")
+                console.print()
+                console.print("[dim]RAP routes are learned from peer heartbeats.[/dim]")
+                console.print("[dim]Wait for the heartbeat interval to elapse.[/dim]")
+
+            console.print()
+
+        except Exception as e:
+            console.print(f"[red]Error reading routes: {e}[/red]")
+
+        Prompt.ask("Press Enter to continue")
+
 
     def _manage_peers(self):
         """Peer management submenu."""
