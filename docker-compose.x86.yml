@@ -1,10 +1,13 @@
-# advBBS Docker Compose Configuration
+# advBBS Docker Compose for x86/x64 Linux
+#
+# For desktops, servers, VMs, and other x86/x64 systems
 #
 # Usage:
+#   ./setup.sh                            # Run setup first
 #   docker compose up -d                  # Start BBS + web config
 #   docker compose logs -f                # View logs
 #
-# Web config: http://localhost:7681 (dialog-based TUI in browser)
+# Web config: http://localhost:7681
 
 services:
   advbbs:
@@ -17,6 +20,10 @@ services:
     image: advbbs:latest
     container_name: advbbs
     restart: unless-stopped
+
+    # USB serial connection to Meshtastic device
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
 
     ports:
       # Web-based config interface (ttyd)

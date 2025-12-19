@@ -13,7 +13,7 @@ echo ""
 if ! command -v docker &> /dev/null; then
     echo "❌ Docker not found. Please install Docker first:"
     echo "   curl -fsSL https://get.docker.com | sh"
-    echo "   sudo usermod -aG docker $USER"
+    echo "   sudo usermod -aG docker \$USER"
     echo "   (Log out and back in after adding to docker group)"
     exit 1
 fi
@@ -41,6 +41,56 @@ else
 fi
 
 echo ""
+echo "========================================"
+echo "  Platform Selection"
+echo "========================================"
+echo ""
+echo "What platform are you installing on?"
+echo ""
+echo "  1) Raspberry Pi (Pi 4, Pi 5, Pi Zero 2 W, etc.)"
+echo "  2) x86/x64 Linux (Desktop, Server, VM, etc.)"
+echo ""
+
+while true; do
+    read -p "Enter choice [1 or 2]: " choice
+    case $choice in
+        1)
+            PLATFORM="rpi"
+            echo ""
+            echo "✓ Raspberry Pi selected"
+            break
+            ;;
+        2)
+            PLATFORM="x86"
+            echo ""
+            echo "✓ x86/x64 Linux selected"
+            break
+            ;;
+        *)
+            echo "Please enter 1 or 2"
+            ;;
+    esac
+done
+
+echo ""
+echo "Configuring for $PLATFORM..."
+
+# Backup existing docker-compose.yml if it exists and isn't a symlink
+if [ -f "docker-compose.yml" ] && [ ! -L "docker-compose.yml" ]; then
+    cp docker-compose.yml docker-compose.yml.bak
+    echo "✓ Backed up existing docker-compose.yml"
+fi
+
+# Copy the appropriate compose file
+if [ "$PLATFORM" = "rpi" ]; then
+    cp docker-compose.rpi.yml docker-compose.yml
+    echo "✓ Configured for Raspberry Pi (ARM64)"
+else
+    cp docker-compose.x86.yml docker-compose.yml
+    echo "✓ Configured for x86/x64 Linux"
+fi
+
+echo ""
 echo "Creating data volume..."
 
 # Create the data volume if it doesn't exist
@@ -60,7 +110,4 @@ echo "Next steps:"
 echo "  1. Build and start:  $COMPOSE_CMD up -d"
 echo "  2. View logs:        $COMPOSE_CMD logs -f"
 echo "  3. Configure:        Open http://localhost:7681"
-echo ""
-echo "For Raspberry Pi, use the optimized config:"
-echo "  $COMPOSE_CMD -f docker-compose.rpi.yml up -d"
 echo ""

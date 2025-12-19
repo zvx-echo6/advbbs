@@ -15,16 +15,14 @@
 - **Operating modes**: Full, mail-only, boards-only, or repeater mode
 - **Docker ready**: Includes Dockerfile and docker-compose for easy deployment
 
-## Quick Start
-
-### Docker (Recommended)
+## Quick Start (Docker)
 
 ```bash
 # Clone repository
 git clone https://github.com/zvx-echo6/advbbs
 cd advbbs
 
-# Run setup (creates data volume, checks prerequisites)
+# Run setup - will ask if you're on Pi or x86
 chmod +x setup.sh
 ./setup.sh
 
@@ -35,27 +33,13 @@ docker compose up -d
 docker compose logs -f
 ```
 
-### Raspberry Pi
+The setup script will:
+1. Check Docker is installed and running
+2. Ask what platform you're on (Raspberry Pi or x86/x64)
+3. Configure the correct docker-compose.yml for your platform
+4. Create the data volume
 
-For Raspberry Pi (including Pi 4, Pi Zero 2 W), use the optimized config:
-
-```bash
-# Clone repository
-git clone https://github.com/zvx-echo6/advbbs
-cd advbbs
-
-# Run setup
-chmod +x setup.sh
-./setup.sh
-
-# Start with RPi-optimized settings
-docker compose -f docker-compose.rpi.yml up -d
-
-# View logs
-docker compose -f docker-compose.rpi.yml logs -f
-```
-
-**Note:** Build may take 10-15 minutes on a Pi due to compiling native extensions. For faster deployment, build on a more powerful machine and push to a registry.
+**Note:** Build may take 10-15 minutes on a Pi due to compiling native extensions.
 
 ### Configuration
 
@@ -244,20 +228,6 @@ See [docs/security.md](docs/security.md) for more details.
 
 ## Troubleshooting
 
-### "external volume not found" error
-
-If you see `external volume "fq51bbs_data" not found` or similar, run the setup script first:
-
-```bash
-./setup.sh
-```
-
-Or manually create the volume:
-
-```bash
-docker volume create advbbs_data
-```
-
 ### Build fails on Raspberry Pi
 
 The build can take 10-15 minutes on a Pi due to compiling native extensions. If it fails due to memory, try:
@@ -270,7 +240,7 @@ sudo mkswap /swapfile
 sudo swapon /swapfile
 
 # Then build
-docker compose -f docker-compose.rpi.yml build
+docker compose build
 ```
 
 ### Web config not loading
