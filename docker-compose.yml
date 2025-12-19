@@ -23,8 +23,8 @@ services:
       - "7681:7681"
 
     volumes:
-      # Use existing fq51bbs data volume (database is compatible)
-      - fq51bbs_data:/data
+      # Persistent data volume (auto-created)
+      - advbbs_data:/data
       - advbbs_logs:/var/log
 
     environment:
@@ -45,7 +45,7 @@ services:
           memory: 64M
 
     healthcheck:
-      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect(/data/fq51bbs.db).execute(SELECT 1)"]
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/data/advbbs.db').execute('SELECT 1')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -58,9 +58,8 @@ services:
         max-file: "3"
 
 volumes:
-  fq51bbs_data:
-    external: true
-    name: fq51bbs_data
+  advbbs_data:
+    name: advbbs_data
   advbbs_logs:
     name: advbbs_logs
 

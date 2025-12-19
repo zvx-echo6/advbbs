@@ -20,10 +20,13 @@
 ### Docker (Recommended)
 
 ```bash
-# Clone repository (choose one)
-git clone https://github.com/zvx-echo6/advbbs   # GitHub
-git clone https://forge.echo6.co/matt/advbbs   # Gitea mirror
+# Clone repository
+git clone https://github.com/zvx-echo6/advbbs
 cd advbbs
+
+# Run setup (creates data volume, checks prerequisites)
+chmod +x setup.sh
+./setup.sh
 
 # Start BBS
 docker compose up -d
@@ -32,20 +35,33 @@ docker compose up -d
 docker compose logs -f
 ```
 
-### Configuration
-
-Open **http://localhost:7681** in your browser for the web-based config interface (Rich TUI).
-
-Config is stored in the Docker volume and persists across restarts.
-
 ### Raspberry Pi
 
+For Raspberry Pi (including Pi 4, Pi Zero 2 W), use the optimized config:
+
 ```bash
-# On RPi Zero 2 W (build may take 10-15 min)
-docker compose up -d
+# Clone repository
+git clone https://github.com/zvx-echo6/advbbs
+cd advbbs
+
+# Run setup
+chmod +x setup.sh
+./setup.sh
+
+# Start with RPi-optimized settings
+docker compose -f docker-compose.rpi.yml up -d
+
+# View logs
+docker compose -f docker-compose.rpi.yml logs -f
 ```
 
-For faster deployment, build on a more powerful machine and push to a registry.
+**Note:** Build may take 10-15 minutes on a Pi due to compiling native extensions. For faster deployment, build on a more powerful machine and push to a registry.
+
+### Configuration
+
+Open **http://localhost:7681** (or `http://<pi-ip>:7681`) in your browser for the web-based config interface.
+
+Config is stored in the Docker volume and persists across restarts.
 
 ### Manual Installation
 
@@ -225,6 +241,46 @@ meshtastic --ch-set psk base64:YOUR_KEY_HERE --ch-index 0
 With PSK enabled, all Meshtastic traffic (including BBS commands) is encrypted with AES-256, providing transport-layer security equivalent to IRC with TLS.
 
 See [docs/security.md](docs/security.md) for more details.
+
+## Troubleshooting
+
+### "external volume not found" error
+
+If you see `external volume "fq51bbs_data" not found` or similar, run the setup script first:
+
+```bash
+./setup.sh
+```
+
+Or manually create the volume:
+
+```bash
+docker volume create advbbs_data
+```
+
+### Build fails on Raspberry Pi
+
+The build can take 10-15 minutes on a Pi due to compiling native extensions. If it fails due to memory, try:
+
+```bash
+# Add swap temporarily
+sudo fallocate -l 1G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+# Then build
+docker compose -f docker-compose.rpi.yml build
+```
+
+### Web config not loading
+
+Make sure port 7681 is accessible and the container is running:
+
+```bash
+docker compose ps
+docker compose logs advbbs
+```
 
 ## Architecture
 
