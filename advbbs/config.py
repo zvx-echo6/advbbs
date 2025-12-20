@@ -23,6 +23,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+
+def _is_running_in_docker() -> bool:
+    """Detect if running inside a Docker container."""
+    return os.path.exists("/.dockerenv") or os.environ.get("ADVBBS_DOCKER", "").lower() in ("1", "true", "yes")
+
+
+def _get_default_data_path() -> str:
+    """Return appropriate data path based on environment."""
+    if _is_running_in_docker():
+        return "/data"
+    return "./data"
+
+
+def _get_default_log_file() -> str:
+    """Return appropriate log file path based on environment."""
+    if _is_running_in_docker():
+        return "/var/log/advbbs.log"
+    return "./logs/advbbs.log"
+
 # Use tomllib for Python 3.11+, tomli for earlier versions
 if sys.version_info >= (3, 11):
     import tomllib
@@ -69,8 +88,8 @@ class BBSConfig:
 @dataclass
 class DatabaseConfig:
     """Database settings."""
-    path: str = "/data/advbbs.db"
-    backup_path: str = "/data/backups"
+    path: str = field(default_factory=lambda: f"{_get_default_data_path()}/advbbs.db")
+    backup_path: str = field(default_factory=lambda: f"{_get_default_data_path()}/backups")
     backup_interval_hours: int = 24
 
 
@@ -217,7 +236,7 @@ class CLIConfigSettings:
 class LoggingConfig:
     """Logging settings."""
     level: str = "INFO"
-    file: str = "/var/log/advbbs.log"
+    file: str = field(default_factory=_get_default_log_file)
     max_size_mb: int = 10
     backup_count: int = 3
     enabled: bool = True  # Added for compatibility
