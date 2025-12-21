@@ -18,13 +18,23 @@
 ## Quick Start (Docker)
 
 ```bash
-# Clone repository
-git clone https://github.com/zvx-echo6/advbbs
-cd advbbs
+# Install Docker if it isn't already
+curl -sSL https://get.docker.com/ | CHANNEL=stable bash
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
 
-# Run setup - will ask if you're on Pi or x86
-chmod +x setup.sh
-./setup.sh
+# Create working directory for project
+mkdir -p ./advbbs/data && cd advbbs
+
+# Copy the latest docker-compose file from the GitHub
+curl -O https://raw.githubusercontent.com/zvx-echo6/advbbs/refs/heads/main/docker-compose.yml
+
+# or use wget if you don't have cURL installed
+wget https://raw.githubusercontent.com/zvx-echo6/advbbs/refs/heads/main/docker-compose.yml
+
+# Edit the docker-compose file to your liking
+# You will need to comment out the "devices:" section if you are connecting over TCP
+nano docker-compose.yml
 
 # Start BBS
 docker compose up -d
@@ -33,13 +43,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-The setup script will:
-1. Check Docker is installed and running
-2. Ask what platform you're on (Raspberry Pi or x86/x64)
-3. Configure the correct docker-compose.yml for your platform
-4. Create the data volume
-
-**Note:** Build may take 10-15 minutes on a Pi due to compiling native extensions.
+**Note**: The docker image supports 64-bit RISC-V, this repo does not build images for it as python libraries must be built for it which takes too long.
 
 ### Configuration
 
@@ -269,4 +273,4 @@ Special thanks to the **Freq51 community** for their patience and support during
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+MIT License

@@ -1,50 +1,34 @@
-# advBBS Dockerfile
-# Lightweight BBS for Meshtastic Mesh Networks
-#
-# Build: docker build -t advbbs .
-# Run:   docker run -d --name advbbs \
-#          --device=/dev/ttyUSB0 \
-#          -v advbbs_data:/data \
-#          -v ./config.toml:/app/config.toml:ro \
-#          advbbs
+FROM alpine:3.23
 
-FROM python:3.11-slim-bookworm
-
-# Labels
 LABEL maintainer="advBBS Project"
 LABEL description="Lightweight BBS for Meshtastic Mesh Networks"
 LABEL version="0.1.0"
 
-# Build arguments
 ARG UID=1000
 ARG GID=1000
 
-# Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PYTHONUNBUFFERED=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # For serial communication
+# Install System Deps + Pre-compiled Python Libraries
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    py3-cryptography \
+    py3-argon2-cffi \
+    ttyd \
     udev \
-    # For Argon2 (native extension)
-    libffi-dev \
-    # For health checks
+    bash \
     curl \
-    # For process management (restart signal)
     procps \
-    && rm -rf /var/lib/apt/lists/* \
-    # Install ttyd from GitHub releases
-    && curl -sL https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 -o /usr/local/bin/ttyd \
-    && chmod +x /usr/local/bin/ttyd
+    dialog
 
 # Create non-root user
-RUN groupadd -g ${GID} advbbs && \
+RUN apk add --no-cache shadow && \
+    groupadd -g ${GID} advbbs && \
     useradd -u ${UID} -g ${GID} -m -s /bin/bash advbbs && \
-    # Add to dialout group for serial access
-    usermod -aG dialout advbbs
+    addgroup advbbs dialout && \
+    apk del shadow
 
 # Create directories
 RUN mkdir -p /app /data /data/backups /var/log && \
@@ -52,26 +36,25 @@ RUN mkdir -p /app /data /data/backups /var/log && \
 
 WORKDIR /app
 
-# Install Python dependencies first (for layer caching)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Install remaining Python deps (meshtastic, rich, tomli)
+# We use --break-system-packages because we are intentionally mixing 
+# apk packages (cryptography) with pip packages in this container.
+RUN apk add --no-cache --virtual .build-deps build-base linux-headers python3-dev libffi-dev && \
+    pip install --no-cache-dir --break-system-packages -r requirements.txt && \
+    apk del .build-deps
+
 COPY --chown=advbbs:advbbs advbbs/ /app/advbbs/
 COPY --chown=advbbs:advbbs config.example.toml /app/
 COPY --chown=advbbs:advbbs docker-entrypoint.sh /app/
 COPY --chown=advbbs:advbbs advbbs-config /usr/local/bin/advbbs-config
 
-# Switch to non-root user
 USER advbbs
 
-# Data volume mount point
 VOLUME ["/data"]
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import sqlite3; sqlite3.connect('/data/advbbs.db').execute('SELECT 1')" || exit 1
+HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 \
+    CMD python3 -c "import sqlite3; sqlite3.connect('/data/advbbs.db').execute('SELECT 1')" || exit 1
 
-# Entrypoint handles config validation
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-# No CMD needed - entrypoint handles config path via advBBS_CONFIG env var
