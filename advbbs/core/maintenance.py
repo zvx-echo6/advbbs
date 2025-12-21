@@ -124,9 +124,9 @@ class MaintenanceManager:
             msg = self._format_announcement("[{callsign}] {name} online. {users} users, {msgs} msgs. DM !bbs for help.")
 
         try:
-            channel = self.config.meshtastic.public_channel
+            channel = self.config.bbs.announcement_channel
             await self.bbs.mesh.send_broadcast(msg, channel)
-            logger.info(f"Sent announcement: {msg}")
+            logger.info(f"Sent announcement on channel {channel}: {msg}")
         except Exception as e:
             logger.error(f"Failed to send announcement: {e}")
 

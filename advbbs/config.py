@@ -80,6 +80,7 @@ class BBSConfig:
     max_message_age_days: int = 30
     announcement_interval_hours: int = 12
     announcements_enabled: bool = True  # Enable/disable periodic announcements
+    announcement_channel: int = 0  # Channel to broadcast announcements on
     announcement_message: str = ""  # Custom announcement (empty = default with stats)
     session_timeout_minutes: int = 30  # Auto-logout after inactivity
     reply_to_unknown_commands: bool = True  # Reply with "Unknown cmd" for unrecognized messages
