@@ -43,6 +43,8 @@ docker compose up -d
 docker compose logs -f
 ```
 
+**Note**: The docker image supports 64-bit RISC-V, this repo does not build images for it as python libraries must be built for it which takes too long.
+
 ### Configuration
 
 Open **http://localhost:7681** (or `http://<pi-ip>:7681`) in your browser for the web-based config interface.
