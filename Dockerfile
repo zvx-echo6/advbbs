@@ -19,15 +19,16 @@ RUN apk add --no-cache \
     ttyd \
     udev \
     bash \
-    shadow \
     curl \
     procps \
     dialog
 
 # Create non-root user
-RUN groupadd -g ${GID} advbbs && \
+RUN apk add --no-cache shadow && \
+    groupadd -g ${GID} advbbs && \
     useradd -u ${UID} -g ${GID} -m -s /bin/bash advbbs && \
-    addgroup advbbs dialout
+    addgroup advbbs dialout && \
+    apk del shadow
 
 # Create directories
 RUN mkdir -p /app /data /data/backups /var/log && \
@@ -40,7 +41,9 @@ COPY requirements.txt .
 # Install remaining Python deps (meshtastic, rich, tomli)
 # We use --break-system-packages because we are intentionally mixing 
 # apk packages (cryptography) with pip packages in this container.
-RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+RUN apk add --no-cache --virtual .build-deps build-base linux-headers python3-dev libffi-dev && \
+    pip install --no-cache-dir --break-system-packages -r requirements.txt && \
+    apk del .build-deps
 
 COPY --chown=advbbs:advbbs advbbs/ /app/advbbs/
 COPY --chown=advbbs:advbbs config.example.toml /app/
