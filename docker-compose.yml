@@ -18,7 +18,7 @@
 #   ADVBBS_TCP_PORT      - TCP port if using tcp connection (default: 4403)
 
 services:
-    image: ghcr.io/zvx-echo6/advbbs:main
+    image: ghcr.io/zvx-echo6/advbbs:latest
     container_name: advbbs
     ports:
       - "7681:7681"
