@@ -115,6 +115,7 @@ class ConfigTool:
                 "max_message_age_days": 30,
                 "announcement_interval_hours": 12,
                 "announcements_enabled": True,
+                "announcement_channel": 0,
                 "announcement_message": "",
                 "session_timeout_minutes": 30,
                 "reply_to_unknown_commands": True,
@@ -414,10 +415,11 @@ class ConfigTool:
             table.add_row("6. Message Expiration", f"{self._get('bbs', 'max_message_age_days', 30)} days")
             table.add_row("7. Announcement Interval", f"{self._get('bbs', 'announcement_interval_hours', 12)} hours")
             table.add_row("8. Announcements Enabled", self._status_icon(self._get("bbs", "announcements_enabled", True)))
+            table.add_row("9. Announcement Channel", str(self._get("bbs", "announcement_channel", 0)))
             ann_msg = self._get("bbs", "announcement_message", "") or "(default)"
-            table.add_row("9. Announcement Message", ann_msg[:40] + ("..." if len(ann_msg) > 40 else ""))
-            table.add_row("10. Session Timeout", f"{self._get('bbs', 'session_timeout_minutes', 30)} minutes")
-            table.add_row("11. Reply to Unknown Cmds", self._status_icon(self._get("bbs", "reply_to_unknown_commands", True)))
+            table.add_row("10. Announcement Message", ann_msg[:40] + ("..." if len(ann_msg) > 40 else ""))
+            table.add_row("11. Session Timeout", f"{self._get('bbs', 'session_timeout_minutes', 30)} minutes")
+            table.add_row("12. Reply to Unknown Cmds", self._status_icon(self._get("bbs", "reply_to_unknown_commands", True)))
 
             console.print(table)
             console.print()
@@ -459,14 +461,19 @@ class ConfigTool:
                 self._set("bbs", "announcements_enabled", value)
             elif choice == 9:
                 console.print()
+                console.print("[dim]Channel index to broadcast announcements on (0 = primary)[/dim]")
+                value = IntPrompt.ask("Announcement channel", default=self._get("bbs", "announcement_channel", 0))
+                self._set("bbs", "announcement_channel", value)
+            elif choice == 10:
+                console.print()
                 console.print("[dim]Variables: {callsign}, {name}, {users}, {msgs}[/dim]")
                 console.print("[dim]Leave empty for default message[/dim]")
                 value = Prompt.ask("Announcement message", default=self._get("bbs", "announcement_message", ""))
                 self._set("bbs", "announcement_message", value)
-            elif choice == 10:
+            elif choice == 11:
                 value = IntPrompt.ask("Session timeout (minutes)", default=self._get("bbs", "session_timeout_minutes", 30))
                 self._set("bbs", "session_timeout_minutes", value)
-            elif choice == 11:
+            elif choice == 12:
                 current = self._get("bbs", "reply_to_unknown_commands", True)
                 self._set("bbs", "reply_to_unknown_commands", not current)
 

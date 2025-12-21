@@ -10,6 +10,7 @@ admin_password = "CHANGE_ME"       # REQUIRED: Change this!
 motd = "Welcome to advBBS!"
 max_message_age_days = 30
 announcement_interval_hours = 12   # 0 to disable
+announcement_channel = 0           # Channel to broadcast announcements on
 
 [database]
 path = "/data/advbbs.db"           # Docker volume path
