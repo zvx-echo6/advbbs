@@ -368,7 +368,7 @@ class ConfigTool:
 
         # Get selection
         try:
-            choice = IntPrompt.ask("Select option", default=12)
+            choice = IntPrompt.ask("Select option", default=14)
             self._handle_main_choice(choice)
         except KeyboardInterrupt:
             self._exit_handler()
