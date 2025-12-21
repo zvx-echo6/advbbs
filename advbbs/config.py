@@ -122,7 +122,8 @@ class FeaturesConfig:
     mail_enabled: bool = True
     boards_enabled: bool = True
     sync_enabled: bool = True
-    registration_enabled: bool = True
+    registration_mode: str = "open"  # open | closed | limited
+    registration_whitelist: list[str] = field(default_factory=list)  # Node IDs allowed when mode=limited
 
 
 @dataclass

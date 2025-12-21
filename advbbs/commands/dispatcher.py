@@ -432,8 +432,15 @@ class CommandDispatcher:
 
     def cmd_register(self, sender: str, args: str, session: dict, channel: int) -> str:
         """Register new user."""
-        if not self.bbs.config.features.registration_enabled:
-            return "Registration is currently disabled."
+        reg_mode = self.bbs.config.features.registration_mode
+
+        if reg_mode == "closed":
+            return "Registration is closed."
+
+        if reg_mode == "limited":
+            whitelist = self.bbs.config.features.registration_whitelist
+            if sender not in whitelist:
+                return "Registration is by invitation only."
 
         parts = args.split(maxsplit=1)
         if len(parts) < 2:

@@ -139,7 +139,8 @@ class ConfigTool:
                 "mail_enabled": True,
                 "boards_enabled": True,
                 "sync_enabled": True,
-                "registration_enabled": True,
+                "registration_mode": "open",
+                "registration_whitelist": [],
             },
             "operating_mode": {
                 "mode": "full",
@@ -604,7 +605,18 @@ class ConfigTool:
             table.add_row("1. Mail", self._status_icon(self._get("features", "mail_enabled", True)))
             table.add_row("2. Bulletin Boards", self._status_icon(self._get("features", "boards_enabled", True)))
             table.add_row("3. Inter-BBS Sync", self._status_icon(self._get("features", "sync_enabled", True)))
-            table.add_row("4. User Registration", self._status_icon(self._get("features", "registration_enabled", True)))
+
+            # Registration mode display
+            reg_mode = self._get("features", "registration_mode", "open")
+            whitelist = self._get("features", "registration_whitelist", [])
+            if reg_mode == "open":
+                reg_status = "[green]Open[/green]"
+            elif reg_mode == "closed":
+                reg_status = "[red]Closed[/red]"
+            else:
+                reg_status = f"[yellow]Limited[/yellow] ({len(whitelist)} nodes)"
+            table.add_row("4. Registration Mode", reg_status)
+            table.add_row("5. Registration Whitelist", f"{len(whitelist)} nodes")
 
             console.print(table)
             console.print()
@@ -612,7 +624,7 @@ class ConfigTool:
             console.print()
 
             try:
-                choice = IntPrompt.ask("Select option to toggle", default=0)
+                choice = IntPrompt.ask("Select option", default=0)
             except KeyboardInterrupt:
                 return
 
@@ -630,8 +642,118 @@ class ConfigTool:
                 # Also update sync.enabled
                 self._set("sync", "enabled", not current)
             elif choice == 4:
-                current = self._get("features", "registration_enabled", True)
-                self._set("features", "registration_enabled", not current)
+                self._set_registration_mode()
+            elif choice == 5:
+                self._manage_registration_whitelist()
+
+    def _set_registration_mode(self):
+        """Set registration mode."""
+        console.print()
+        console.print("[cyan]Registration Modes:[/cyan]")
+        console.print("[cyan]1.[/cyan] Open - Anyone can register")
+        console.print("[cyan]2.[/cyan] Closed - Registration disabled")
+        console.print("[cyan]3.[/cyan] Limited - Only whitelisted nodes can register")
+        console.print()
+
+        current = self._get("features", "registration_mode", "open")
+        mode_map = {"open": 1, "closed": 2, "limited": 3}
+        reverse_map = {1: "open", 2: "closed", 3: "limited"}
+
+        try:
+            choice = IntPrompt.ask("Select mode", default=mode_map.get(current, 1))
+            if choice in reverse_map:
+                self._set("features", "registration_mode", reverse_map[choice])
+                if reverse_map[choice] == "limited":
+                    whitelist = self._get("features", "registration_whitelist", [])
+                    if not whitelist:
+                        console.print()
+                        console.print("[yellow]Note: Whitelist is empty. Add nodes with option 5.[/yellow]")
+                        Prompt.ask("Press Enter to continue")
+        except KeyboardInterrupt:
+            pass
+
+    def _manage_registration_whitelist(self):
+        """Manage registration whitelist."""
+        while True:
+            self._clear()
+
+            whitelist = self._get("features", "registration_whitelist", [])
+            if not isinstance(whitelist, list):
+                whitelist = []
+
+            console.print(Panel("Registration Whitelist", style="cyan"))
+            console.print()
+            console.print("[dim]Nodes in this list can register when mode is 'limited'[/dim]")
+            console.print()
+
+            if whitelist:
+                for i, node_id in enumerate(whitelist, 1):
+                    console.print(f"  [cyan]{i}.[/cyan] {node_id}")
+                console.print()
+            else:
+                console.print("[dim]No nodes whitelisted[/dim]")
+                console.print()
+
+            console.print("[cyan]A.[/cyan] Add node")
+            console.print("[cyan]D.[/cyan] Delete node")
+            console.print("[cyan]0.[/cyan] Back")
+            console.print()
+
+            try:
+                choice = Prompt.ask("Select option", default="0")
+            except KeyboardInterrupt:
+                return
+
+            if choice == "0":
+                return
+            elif choice.upper() == "A":
+                self._add_whitelist_node()
+            elif choice.upper() == "D":
+                self._delete_whitelist_node()
+
+    def _add_whitelist_node(self):
+        """Add a node to the registration whitelist."""
+        console.print()
+        node_id = Prompt.ask("Node ID (e.g., !a1b2c3d4)")
+        if not node_id:
+            return
+
+        if not node_id.startswith("!"):
+            console.print("[yellow]Node IDs typically start with '!' - adding anyway[/yellow]")
+
+        whitelist = self._get("features", "registration_whitelist", [])
+        if not isinstance(whitelist, list):
+            whitelist = []
+
+        if node_id in whitelist:
+            console.print(f"[yellow]Node {node_id} is already whitelisted[/yellow]")
+        else:
+            whitelist.append(node_id)
+            self._set("features", "registration_whitelist", whitelist)
+            console.print(f"[green]Node {node_id} added to whitelist[/green]")
+
+        Prompt.ask("Press Enter to continue")
+
+    def _delete_whitelist_node(self):
+        """Remove a node from the registration whitelist."""
+        whitelist = self._get("features", "registration_whitelist", [])
+        if not whitelist:
+            console.print("[yellow]Whitelist is empty[/yellow]")
+            Prompt.ask("Press Enter to continue")
+            return
+
+        try:
+            idx = IntPrompt.ask("Enter node number to delete") - 1
+            if 0 <= idx < len(whitelist):
+                removed = whitelist.pop(idx)
+                self._set("features", "registration_whitelist", whitelist)
+                console.print(f"[green]Node {removed} removed from whitelist[/green]")
+            else:
+                console.print("[red]Invalid node number[/red]")
+        except (ValueError, KeyboardInterrupt):
+            pass
+
+        Prompt.ask("Press Enter to continue")
 
     def _sync_settings(self):
         """Sync and peer configuration."""
@@ -1722,8 +1844,13 @@ class ConfigTool:
             console.print("[cyan]Step 5: Features[/cyan]")
             console.print("-" * 40)
 
-            reg = Confirm.ask("Allow user registration?", default=True)
-            self._set("features", "registration_enabled", reg)
+            console.print("Registration mode:")
+            console.print("  1. Open - Anyone can register")
+            console.print("  2. Closed - Registration disabled")
+            console.print("  3. Limited - Only whitelisted nodes")
+            reg_choice = IntPrompt.ask("Select mode", default=1)
+            reg_modes = {1: "open", 2: "closed", 3: "limited"}
+            self._set("features", "registration_mode", reg_modes.get(reg_choice, "open"))
 
             sync = Confirm.ask("Enable inter-BBS sync?", default=True)
             self._set("features", "sync_enabled", sync)

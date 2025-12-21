@@ -35,7 +35,9 @@ argon2_parallelism = 1
 mail_enabled = true
 boards_enabled = true
 sync_enabled = true
-registration_enabled = true
+registration_mode = "open"         # open | closed | limited
+registration_whitelist = []        # Node IDs allowed when mode = "limited"
+                                   # Example: ["!a1b2c3d4", "!e5f6g7h8"]
 
 # === OPERATING MODE ===
 [operating_mode]
