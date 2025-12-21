@@ -1,7 +1,5 @@
-# advBBS Docker Compose for x86/x64 Linux
-#
-# For desktops, servers, VMs, and other x86/x64 systems
-#
+# advBBS docker compose
+# 
 # Usage:
 #   ./setup.sh                            # Run setup first
 #   docker compose up -d                  # Start BBS + web config
@@ -20,33 +18,22 @@
 #   ADVBBS_TCP_PORT      - TCP port if using tcp connection (default: 4403)
 
 services:
-  advbbs:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        UID: ${UID:-1000}
-        GID: ${GID:-1000}
-    image: advbbs:latest
+    image: ghcr.io/zvx-echo6/advbbs:main
     container_name: advbbs
+    ports:
+      - "7681:7681"
+    volumes:
+      - ./data:/data
     restart: unless-stopped
 
-    # USB serial connection to Meshtastic device
+    # USB serial connection
+    # Change this to match the address of your device
+    # You should comment this out if you are connecting to the node over TCP.
     devices:
       - /dev/ttyUSB0:/dev/ttyUSB0
-
-    ports:
-      # Web-based config interface (ttyd)
-      - "7681:7681"
-
-    volumes:
-      # Persistent data volume (auto-created)
-      - advbbs_data:/data
-      - advbbs_logs:/var/log
-
+      
     environment:
       - advBBS_CONFIG=/data/config.toml
-      # Customize these for your BBS:
       - TZ=${TZ:-UTC}
       - ADVBBS_NAME=${ADVBBS_NAME:-advBBS}
       - ADVBBS_CALLSIGN=${ADVBBS_CALLSIGN:-ADVBBS}
@@ -57,12 +44,8 @@ services:
       - ADVBBS_TCP_PORT=${ADVBBS_TCP_PORT:-4403}
       - ADVBBS_MODE=${ADVBBS_MODE:-full}
 
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-    stdin_open: true
-    tty: true
-
+    # Resource Limits
+    # Default limits should be safe for low-powered devices. 256MB is plenty for this app.
     deploy:
       resources:
         limits:
@@ -70,25 +53,21 @@ services:
         reservations:
           memory: 64M
 
-    healthcheck:
-      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/data/advbbs.db').execute('SELECT 1')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
+    # Comment out to disable logging to a file
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "5m"
+        max-file: "2"
 
-volumes:
-  advbbs_data:
-    name: advbbs_data
-  advbbs_logs:
-    name: advbbs_logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; c=sqlite3.connect('/data/advbbs.db'); c.execute('SELECT 1'); c.close()"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
-networks:
-  default:
-    name: advbbs_network
+    # This is only needed if you are connecting to the node over TCP
+    # can be commented out if you are using serial (e.g. /dev/ttyUSB0)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
