@@ -1,5 +1,8 @@
 # advBBS Explained Simply
 
+## I know this stuff, how do I use it?
+Take a look at the [User Quickstart](https://github.com/zvx-echo6/advbbs/blob/main/docs/USER-QUICKSTART.md).
+
 ## What is advBBS?
 
 Think of advBBS like a **community bulletin board at a coffee shop**, but for radios.
