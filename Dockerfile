@@ -21,7 +21,8 @@ RUN apk add --no-cache \
     bash \
     curl \
     procps \
-    dialog
+    dialog \
+    tzdata
 
 # Create non-root user
 RUN apk add --no-cache shadow && \
