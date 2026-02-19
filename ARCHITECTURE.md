@@ -31,7 +31,7 @@ advBBS is a lightweight, encryption-first BBS for Meshtastic mesh networks. It d
 1. **Lightweight First** - Must run comfortably on Raspberry Pi Zero 2 W (512MB RAM, quad-core 1GHz ARM)
 2. **Encryption Native** - All messages encrypted at rest; user passwords derive encryption keys
 3. **Mesh Friendly** - Never flood the mesh; respect bandwidth constraints
-4. **Interoperable** - Compatible with meshing-around, TC2-BBS-mesh, and frozenbbs
+4. **Federated** - advBBS-to-advBBS federation with peer whitelisting
 5. **CLI Only** - No GUI, no web interface, pure terminal interaction
 
 ### Target Hardware Constraints
@@ -720,7 +720,7 @@ Repeaters can optionally announce their presence to the mesh. All settings are u
 announce_message = "advBBS Relay online"
 
 # Informative
-announce_message = "[FQ51] Mail relay active. SM <user> <msg> to send."
+announce_message = "[ALPHA] Mail relay active. SM <user> <msg> to send."
 
 # With node ID
 announce_message = "BBS repeater !abc123 - forwarding mail & bulletins"
@@ -917,7 +917,7 @@ class AdminChannelHandler:
             return
 
         parts = msg.split("|")
-        if len(parts) < 4 or parts[0] != "FQ51" or parts[2] != "ADMIN":
+        if len(parts) < 4 or parts[0] != "ALPHA" or parts[2] != "ADMIN":
             return
 
         action = parts[3]
@@ -986,20 +986,7 @@ ALTER TABLE users ADD COLUMN banned_at_us INTEGER;  -- When banned
 
 ### Design Philosophy
 
-advBBS acts as a **polyglot BBS** - it speaks each external system's native protocol when syncing with them, while using its own optimized DM-based protocol for advBBS-to-advBBS communication.
-
-**We do NOT try to change how other BBS systems work.** We participate as a peer in their existing networks.
-
-### Sync Compatibility Matrix
-
-| BBS System | Has Sync Protocol? | advBBS Status | Approach |
-|------------|-------------------|----------------|----------|
-| **advBBS** | Yes | ✅ **Implemented** | Native DM-based protocol (JSON/base64) |
-| **TC2-BBS-mesh** | Yes | 🔜 Planned | Use TC2's exact pipe-delimited protocol |
-| **meshing-around** | Yes | 🔜 Planned | Use their exact bbslink/bbsack protocol |
-| **frozenbbs** | **No** | ❌ Cannot sync | No protocol exists |
-
-> **Note:** Only advBBS-to-advBBS sync is currently implemented. TC2-BBS and meshing-around compatibility layers exist in code but are not yet production-ready.
+advBBS uses its own DM-based protocol for advBBS-to-advBBS federation. Only configured and whitelisted peers can participate in sync.
 
 ### Sync Architecture Overview
 
@@ -1008,16 +995,14 @@ advBBS acts as a **polyglot BBS** - it speaks each external system's native prot
 │                        SyncManager                               │
 │  (advbbs/sync/manager.py)                                      │
 │                                                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐     │
-│  │ AdvBBSNative  │  │    TC2      │  │   MeshingAround      │     │
-│  │   Sync      │  │ Compat      │  │   Compat             │     │
-│  │ ✅ Active   │  │ 🔜 Planned  │  │   🔜 Planned         │     │
-│  └─────────────┘  └─────────────┘  └──────────────────────┘     │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │              AdvBBS Native Protocol                       │   │
+│  │   HELLO / SYNC_ACK / RAP_PING / RAP_PONG / RAP_ROUTES   │   │
+│  └──────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                 Remote Mail Protocol                      │   │
 │  │           MAILREQ → MAILACK → MAILDAT → MAILDLV          │   │
-│  │                      ✅ Active                            │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -1047,7 +1032,7 @@ mail_max_hops = 3                      # Max relay hops for mail
 [[sync.peers]]
 node_id = "!abc12345"                  # Meshtastic node ID
 name = "REMOTE1"                       # BBS name (used in user@BBS addressing)
-protocol = "advbbs"                      # Protocol: advbbs, tc2, or meshing-around
+protocol = "advbbs"                      # Only advbbs is supported
 enabled = true                         # Enable/disable this peer
 
 [[sync.peers]]
@@ -1096,7 +1081,7 @@ CREATE TABLE bbs_peers (
     node_id         TEXT UNIQUE NOT NULL,    -- Meshtastic node ID (!abc123)
     name            TEXT,                     -- Human-readable BBS name
     callsign        TEXT,                     -- BBS callsign
-    protocol        TEXT DEFAULT 'advbbs',      -- advbbs, tc2, meshing-around
+    protocol        TEXT DEFAULT 'advbbs',
     capabilities    TEXT,                     -- Comma-separated: mail,bulletin
     last_seen_us    INTEGER,                  -- Last message received
     last_sync_us    INTEGER,                  -- Last successful sync timestamp
@@ -1173,7 +1158,7 @@ The `SYNC_MSG` payload is JSON with these fields:
   "subject": "Hello World",
   "body": "This is a test message",
   "timestamp_us": 1702656000000000,
-  "origin_bbs": "FQ51"
+  "origin_bbs": "ALPHA"
 }
 ```
 
@@ -1182,7 +1167,7 @@ The `SYNC_MSG` payload is JSON with these fields:
 ```
 BBS-A (Initiator)                           BBS-B (Peer)
     │                                            │
-    │──── advBBS|1|HELLO|FQ51:BBS-A|mail,bulletin ─▶│  Handshake
+    │──── advBBS|1|HELLO|ALPHA:BBS-A|mail,bulletin ─▶│  Handshake
     │◀─── advBBS|1|HELLO|FQ52:BBS-B|mail,bulletin ──│
     │                                            │
     │  [Scheduled sync triggers]                 │
@@ -1355,106 +1340,34 @@ MAILDLV|<uuid>|OK|<recipient>@<bbs>
 ### Delivery Flow Example
 
 ```
-User on FQ51 sends: !send alice@REMOTE2 Hello!
+User on ALPHA sends: !send alice@REMOTE2 Hello!
 
-1. FQ51 creates MAILREQ:
-   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|1|1|FQ51
+1. ALPHA creates MAILREQ:
+   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|1|1|ALPHA
 
-2. FQ51 doesn't know REMOTE2 directly, but knows REMOTE1
+2. ALPHA doesn't know REMOTE2 directly, but knows REMOTE1
    Forwards to REMOTE1
 
 3. REMOTE1 receives MAILREQ, adds itself to route:
-   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|2|1|FQ51,REMOTE1
+   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|2|1|ALPHA,REMOTE1
    Forwards to REMOTE2
 
 4. REMOTE2 receives MAILREQ:
    - Checks: alice exists? Yes
    - Sends: MAILACK|550e8400...|OK
 
-5. ACK relayed back through REMOTE1 to FQ51
+5. ACK relayed back through REMOTE1 to ALPHA
 
-6. FQ51 sends: MAILDAT|550e8400...|1/1|Hello!
+6. ALPHA sends: MAILDAT|550e8400...|1/1|Hello!
 
 7. Data relayed through REMOTE1 to REMOTE2
 
 8. REMOTE2 stores message, sends: MAILDLV|550e8400...|OK|alice@REMOTE2
 
-9. Delivery confirmation relayed back to FQ51
+9. Delivery confirmation relayed back to ALPHA
 ```
 
 ---
-
-## Protocol 1: TC2-BBS-mesh Compatibility (Planned)
-
-**Reference:** https://github.com/TheCommsChannel/TC2-BBS-mesh
-
-> ⚠️ **Status:** Code exists but not production-ready
-
-TC2-BBS uses pipe-delimited messages. advBBS implements their exact format.
-
-### TC2 Message Formats
-
-```
-BULLETIN|<board>|<sender_short>|<subject>|<content>|<uuid>
-MAIL|<sender>|<recipient>|<subject>|<content>|<uuid>
-DELETE_BULLETIN|<uuid>
-DELETE_MAIL|<uuid>
-CHANNEL|<name>|<url>
-```
-
-### Pipe Character Escaping
-
-Pipe `|` in content is escaped as `¦` (broken bar) to avoid delimiter conflicts.
-
----
-
-## Protocol 2: meshing-around Compatibility (Planned)
-
-**Reference:** https://github.com/SpudGunMan/meshing-around
-
-> ⚠️ **Status:** Code exists but not production-ready
-
-meshing-around uses pickle-serialized messages with base64 encoding.
-
-### Message Format
-
-```
-bbslink <base64_pickle_data>
-bbsack <message_id>
-```
-
-### Payload Structure (pickle array)
-
-```python
-[messageID, subject, message, fromNode, timestamp, threadID, replytoID]
-```
-
----
-
-## Unified Sync Manager
-
-The `SyncManager` class routes messages to appropriate protocol handlers:
-
-```python
-def handle_sync_message(self, message: str, sender: str) -> bool:
-    # Check for remote mail protocol first
-    if message.startswith("MAIL"):
-        return self.handle_mail_protocol(message, sender)
-
-    # Try FQ51 native (most specific prefix)
-    if self._native.is_advbbs_message(message):
-        return self._native.handle_message(message, sender)
-
-    # Try meshing-around (specific prefixes)
-    if self._meshing_around.is_meshing_around_message(message):
-        return self._meshing_around.handle_message(message, sender)
-
-    # Try TC2 (generic pipe format - check last)
-    if self._tc2.is_tc2_message(message):
-        return self._tc2.handle_message(message, sender)
-
-    return False
-```
 
 ---
 
@@ -1824,8 +1737,6 @@ advbbs/
 │   │   ├── peers.py             # Peer management
 │   │   └── compat/
 │   │       ├── __init__.py
-│   │       ├── meshing_around.py # bbslink/bbsack protocol
-│   │       ├── tc2_bbs.py       # Pipe-delimited protocol
 │   │       └── advbbs_native.py   # Native DM-based protocol
 │   ├── web/
 │   │   ├── __init__.py
@@ -2043,21 +1954,16 @@ forward_to_peers = []                # Empty = forward to all known peers
 enabled = true
 auto_sync_interval_minutes = 60      # Scheduled sync with all peers
 
-# Peers with protocol type (polyglot support)
+# Add peer BBS nodes
 [[sync.peers]]
-node_id = "!abc123"
-name = "TC2-BBS-West"
-protocol = "tc2"                     # TC2-BBS-mesh protocol
+node_id = "!abc12345"
+name = "REMOTE1"
+protocol = "advbbs"
 
 [[sync.peers]]
-node_id = "!def456"
-name = "MeshAround-Central"
-protocol = "meshing-around"          # meshing-around bbslink protocol
-
-[[sync.peers]]
-node_id = "!ghi789"
-name = "advBBS-East"
-protocol = "advbbs"                    # Native FQ51 DM-based protocol
+node_id = "!def67890"
+name = "REMOTE2"
+protocol = "advbbs"
 
 # Bulletin sync (scheduled)
 bulletin_sync_interval_minutes = 60  # Hourly
@@ -2832,7 +2738,7 @@ def status_display(bbs):
 - [ ] advBBS protocol implementation
 - [ ] Peer discovery and management
 - [ ] Message synchronization
-- [ ] Compatibility adapters
+- [ ] Route announcement protocol (RAP)
 
 ### Phase 6: CLI Configuration Interface
 - [ ] Interactive menu system
@@ -3059,9 +2965,9 @@ This architecture document requires user approval before implementation begins.
 ## References
 
 - [Meshtastic Python API](https://meshtastic.org/docs/development/python/library/)
-- [meshing-around](https://github.com/SpudGunMan/meshing-around)
-- [TC2-BBS-mesh](https://github.com/TheCommsChannel/TC2-BBS-mesh)
-- [frozenbbs](https://github.com/kstrauser/frozenbbs)
+- [meshing-around](https://github.com/SpudGunMan/meshing-around) (inspiration)
+- [TC2-BBS-mesh](https://github.com/TheCommsChannel/TC2-BBS-mesh) (inspiration)
+- [frozenbbs](https://github.com/kstrauser/frozenbbs) (inspiration)
 - [Argon2 RFC 9106](https://www.rfc-editor.org/rfc/rfc9106.html)
 - [ChaCha20-Poly1305 RFC 8439](https://www.rfc-editor.org/rfc/rfc8439.html)
 - [RPi Zero 2 W Specifications](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/)

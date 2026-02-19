@@ -73,7 +73,7 @@ malice@AIDA sends to johnny@TV51
 
 ### Key Points
 
-- The `@BBS` suffix is the **BBS callsign** (e.g., `TV51`, `AIDA`, `FQ51`)
+- The `@BBS` suffix is the **BBS callsign** (e.g., `TV51`, `AIDA`, `ALPHA`)
 - It is NOT a Meshtastic node ID (like `!abc12345`)
 - Mail routes immediately through the BBS peer network
 - No direct node-to-node delivery - mail goes BBS to BBS
@@ -194,29 +194,29 @@ MAILDLV|<uuid>|OK|<recipient>@<bbs>
 ### Example Flow
 
 ```
-User on FQ51 sends: !send alice@REMOTE2 Hello!
+User on ALPHA sends: !send alice@REMOTE2 Hello!
 
-1. FQ51 creates MAILREQ:
-   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|1|1|FQ51
+1. ALPHA creates MAILREQ:
+   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|1|1|ALPHA
 
-2. FQ51 doesn't know REMOTE2 directly, but knows REMOTE1
+2. ALPHA doesn't know REMOTE2 directly, but knows REMOTE1
    Forwards to REMOTE1
 
 3. REMOTE1 receives MAILREQ, adds itself to route:
-   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|2|1|FQ51,REMOTE1
+   MAILREQ|550e8400...|bob|advBBS|alice|REMOTE2|2|1|ALPHA,REMOTE1
    Forwards to REMOTE2
 
 4. REMOTE2 receives MAILREQ:
    - Checks: alice exists? Yes
    - Sends: MAILACK|550e8400...|OK
 
-5. ACK relayed back through REMOTE1 to FQ51
+5. ACK relayed back through REMOTE1 to ALPHA
 
-6. FQ51 sends: MAILDAT|550e8400...|1/1|Hello!
+6. ALPHA sends: MAILDAT|550e8400...|1/1|Hello!
 
 7. Data relayed through REMOTE1 to REMOTE2
 
 8. REMOTE2 stores message, sends: MAILDLV|550e8400...|OK|alice@REMOTE2
 
-9. Delivery confirmation relayed back to FQ51
+9. Delivery confirmation relayed back to ALPHA
 ```

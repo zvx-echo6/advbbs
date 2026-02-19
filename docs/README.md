@@ -137,7 +137,7 @@ docker-compose up -d
 
 | Term | Example | Purpose |
 |------|---------|---------|
-| BBS Callsign | `TV51`, `AIDA`, `FQ51` | Used in mail addressing (`user@TV51`) |
+| BBS Callsign | `TV51`, `AIDA`, `ALPHA` | Used in mail addressing (`user@TV51`) |
 | Node ID | `!abc12345` | Meshtastic radio identifier |
 
 The callsign is a human-friendly name you configure. The node ID is assigned by Meshtastic.
@@ -145,7 +145,7 @@ The callsign is a human-friendly name you configure. The node ID is assigned by 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  BBS: "advBBS"                                         │
-│  Callsign: ADV         ← Used in user@FQ51 addressing  │
+│  Callsign: ALPHA       ← Used in user@ALPHA addressing   │
 │  Node ID: !def67890     ← Meshtastic identifier         │
 └─────────────────────────────────────────────────────────┘
 ```

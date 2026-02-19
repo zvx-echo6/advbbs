@@ -7,6 +7,7 @@ Coordinates inter-BBS synchronization using advBBS native protocol.
 import asyncio
 import logging
 import time
+import traceback
 from typing import Optional, TYPE_CHECKING
 
 from ..config import SyncConfig
@@ -28,7 +29,7 @@ class SyncManager:
     - Rate-limited sync to prevent mesh flooding
     - UUID-based deduplication
     - Acknowledgment tracking for reliable delivery
-    - Only syncs general and help boards
+    - Batch board sync to reduce mesh traffic
     """
 
     def __init__(self, config: SyncConfig, db, mesh, bbs: Optional["advBBS"] = None):
@@ -58,6 +59,16 @@ class SyncManager:
         self._pending_remote_mail = {}  # uuid -> {chunks, dest_node, timestamp, attempts, next_retry, mailreq}
         self._incoming_remote_mail = {}  # uuid -> {from/to info, received_parts}
         self._relay_mail = {}  # uuid -> {origin_node, dest_node}
+
+        # Board sync — outbound batching
+        self._board_sync_counters = {}    # board_name -> int (new local posts since last sync)
+        self._last_board_sync_time = 0.0  # epoch seconds of last outbound board sync
+
+        # Board sync — outbound pending (after BOARDREQ sent, awaiting ACK/DLV)
+        self._pending_board_sync = {}     # (board_name, peer_node_id) -> {chunks, state, timestamp}
+
+        # Board sync — inbound (receiving chunks from peer)
+        self._incoming_board_sync = {}    # (board_name, sender_node_id) -> {num_parts, received_parts, timestamp}
 
         # MAILREQ retry configuration (from config)
         self._mailreq_retry_intervals = [30, 60, 90]  # seconds between retries
@@ -173,6 +184,18 @@ class SyncManager:
 
         # Clean up stale incoming mail (incomplete chunk reception)
         await self._cleanup_stale_incoming()
+
+        # Clean up stale incoming board sync (incomplete chunk reception)
+        await self._cleanup_stale_incoming_board_sync()
+
+        # Board sync batching: flush when counter >= 10 OR (>= 1 AND 1hr elapsed)
+        total = sum(self._board_sync_counters.values())
+        elapsed = time.time() - self._last_board_sync_time
+        if (total >= 10) or (total >= 1 and elapsed >= 3600):
+            await self._sync_boards_to_peers()
+
+        # Clean up stale relay state
+        await self._cleanup_stale_relay_mail()
 
         # Clean up stale pending ACKs
         await self._cleanup_pending_acks()
@@ -428,6 +451,39 @@ class SyncManager:
         for mail_uuid in to_remove:
             del self._incoming_remote_mail[mail_uuid]
 
+    async def _cleanup_stale_relay_mail(self):
+        """Clean up stale relay state entries (older than 10 minutes)."""
+        now = time.time()
+        timeout = 600  # 10 minutes
+        to_remove = []
+
+        for mail_uuid, relay in self._relay_mail.items():
+            timestamp = relay.get("timestamp", 0)
+            if now - timestamp > timeout:
+                logger.debug(f"Relay state {mail_uuid[:8]} expired")
+                to_remove.append(mail_uuid)
+
+        for mail_uuid in to_remove:
+            del self._relay_mail[mail_uuid]
+
+    async def _cleanup_stale_incoming_board_sync(self):
+        """Clean up incomplete incoming board sync that timed out."""
+        now = time.time()
+        timeout = 300  # 5 minutes
+        to_remove = []
+
+        for key, incoming in self._incoming_board_sync.items():
+            timestamp = incoming.get("timestamp", 0)
+            if now - timestamp > timeout:
+                received = len(incoming.get("received_parts", {}))
+                expected = incoming.get("num_parts", 0)
+                board_name = key[0] if isinstance(key, tuple) else key
+                logger.warning(f"Incoming board sync {board_name} timed out: {received}/{expected} chunks")
+                to_remove.append(key)
+
+        for key in to_remove:
+            del self._incoming_board_sync[key]
+
     def handle_sync_message(self, message: str, sender: str) -> bool:
         """
         Handle incoming sync message from peer.
@@ -443,6 +499,11 @@ class SyncManager:
         # Check for remote mail protocol first
         if message.startswith("MAIL"):
             if self.handle_mail_protocol(message, sender):
+                return True
+
+        # Check for board sync protocol
+        if message.startswith("BOARD"):
+            if self.handle_board_protocol(message, sender):
                 return True
 
         # Handle advBBS native protocol
@@ -874,7 +935,6 @@ class SyncManager:
 
         except Exception as e:
             logger.error(f"Error handling MAILREQ: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return False
 
@@ -918,7 +978,6 @@ class SyncManager:
 
         except Exception as e:
             logger.error(f"Error handling MAILACK: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return False
 
@@ -932,9 +991,6 @@ class SyncManager:
         await asyncio.sleep(self._protocol_delay)
 
         failed_chunks = []
-
-        # Initial delay to avoid TX queue collision after MAILACK
-        await asyncio.sleep(self._protocol_delay)
 
         for i, chunk in enumerate(chunks, 1):
             # Format: MAILDAT|uuid|part/total|data
@@ -1018,7 +1074,6 @@ class SyncManager:
 
         except Exception as e:
             logger.error(f"Error handling MAILNAK: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return False
 
@@ -1066,14 +1121,17 @@ class SyncManager:
 
             # Check if all parts received
             if len(incoming["received_parts"]) >= incoming["num_parts"]:
-                logger.info(f"MAILDAT {uuid[:8]}: All parts received, delivering")
-                self._schedule_async(self._deliver_remote_mail(uuid, incoming))
+                if not incoming.get("delivering"):
+                    incoming["delivering"] = True
+                    logger.info(f"MAILDAT {uuid[:8]}: All parts received, delivering")
+                    self._schedule_async(self._deliver_remote_mail(uuid, incoming))
+                else:
+                    logger.info(f"MAILDAT {uuid[:8]}: Duplicate chunk (delivery already in progress)")
 
             return True
 
         except Exception as e:
             logger.error(f"Error handling MAILDAT: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return False
 
@@ -1111,6 +1169,16 @@ class SyncManager:
                 body=body
             )
 
+            if result == "duplicate":
+                logger.info(f"DELIVER {uuid[:8]}: Duplicate mail (already stored), sending MAILDLV anyway")
+                # Still send delivery confirmation for duplicates so sender stops retrying
+                dlv = f"MAILDLV|{uuid}|OK|{incoming['to_user']}@{self.bbs.config.bbs.callsign}"
+                await self._send_protocol_dm(dlv, incoming["sender_node"])
+                logger.info(f"DELIVER {uuid[:8]}: Sent MAILDLV confirmation to {incoming['sender_node']}")
+                if uuid in self._incoming_remote_mail:
+                    del self._incoming_remote_mail[uuid]
+                return
+
             if not result:
                 logger.error(f"DELIVER {uuid[:8]}: Failed to store in database")
                 return
@@ -1138,7 +1206,6 @@ class SyncManager:
 
         except Exception as e:
             logger.error(f"Error delivering remote mail {uuid[:8]}: {e}")
-            import traceback
             logger.error(traceback.format_exc())
 
     def _handle_maildlv(self, message: str, sender: str) -> bool:
@@ -1180,7 +1247,6 @@ class SyncManager:
 
         except Exception as e:
             logger.error(f"Error handling MAILDLV: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return False
 
@@ -1482,3 +1548,422 @@ class SyncManager:
             return (route[0], route[1], route[2])
 
         return None
+
+    # === Board Sync Protocol ===
+
+    def handle_board_protocol(self, message: str, sender: str) -> bool:
+        """
+        Handle incoming board sync protocol messages.
+
+        Only accepts messages from configured peers.
+        Returns True if message was handled.
+        """
+        if not self.is_peer(sender):
+            logger.warning(f"Rejected board protocol message from non-peer: {sender}")
+            return False
+
+        if message.startswith("BOARDREQ|"):
+            return self._handle_boardreq(message, sender)
+        elif message.startswith("BOARDACK|"):
+            return self._handle_boardack(message, sender)
+        elif message.startswith("BOARDNAK|"):
+            return self._handle_boardnak(message, sender)
+        elif message.startswith("BOARDDAT|"):
+            return self._handle_boarddat(message, sender)
+        elif message.startswith("BOARDDLV|"):
+            return self._handle_boarddlv(message, sender)
+        return False
+
+    def _handle_boardreq(self, message: str, sender: str) -> bool:
+        """Handle incoming BOARDREQ — check if board exists and is synced.
+
+        Format: BOARDREQ|board_name|count|since_us
+        """
+        try:
+            parts = message.split("|")
+            if len(parts) < 4:
+                logger.warning(f"Invalid BOARDREQ format ({len(parts)} parts): {message}")
+                return False
+
+            _, board_name, count_str, since_us_str = parts[:4]
+            count = int(count_str)
+
+            logger.info(f"BOARDREQ received: board={board_name} count={count} from {sender}")
+
+            # Check if board exists and has sync enabled
+            from ..core.boards import BoardRepository
+            board_repo = BoardRepository(self.db)
+            board = board_repo.get_board_by_name(board_name)
+
+            if not board:
+                logger.warning(f"BOARDREQ: Board '{board_name}' not found")
+                self._schedule_async(
+                    self._send_protocol_dm(f"BOARDNAK|{board_name}|NOBOARD", sender)
+                )
+                return True
+
+            if not board.sync_enabled:
+                logger.warning(f"BOARDREQ: Board '{board_name}' sync not enabled")
+                self._schedule_async(
+                    self._send_protocol_dm(f"BOARDNAK|{board_name}|NOSYNC", sender)
+                )
+                return True
+
+            # Accept — store pending and ACK
+            key = (board_name, sender)
+            self._incoming_board_sync[key] = {
+                "board_name": board_name,
+                "board_id": board.id,
+                "count": count,
+                "num_parts": 0,  # Will be set when BOARDDAT arrives
+                "received_parts": {},
+                "sender_node": sender,
+                "timestamp": time.time(),
+            }
+
+            logger.info(f"BOARDREQ: Accepted for board '{board_name}', sending BOARDACK")
+            self._schedule_async(
+                self._send_protocol_dm(f"BOARDACK|{board_name}|OK", sender)
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling BOARDREQ: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def _handle_boardack(self, message: str, sender: str) -> bool:
+        """Handle BOARDACK — send post data chunks.
+
+        Format: BOARDACK|board_name|OK
+        """
+        try:
+            parts = message.split("|")
+            if len(parts) < 3:
+                return False
+
+            _, board_name, status = parts[:3]
+
+            logger.info(f"BOARDACK received: board={board_name} status={status} from {sender}")
+
+            key = (board_name, sender)
+            if key not in self._pending_board_sync:
+                logger.warning(f"BOARDACK: No pending board sync for {board_name} to {sender}")
+                return False
+
+            pending = self._pending_board_sync[key]
+            chunks = pending["chunks"]
+            logger.info(f"BOARDACK: Sending {len(chunks)} chunk(s) for {board_name} to {sender}")
+
+            pending["state"] = "sending"
+            self._schedule_async(self._send_board_chunks(board_name, chunks, sender))
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling BOARDACK: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def _handle_boardnak(self, message: str, sender: str) -> bool:
+        """Handle BOARDNAK — sync rejected by peer.
+
+        Format: BOARDNAK|board_name|reason
+        """
+        try:
+            parts = message.split("|")
+            if len(parts) < 3:
+                return False
+
+            _, board_name, reason = parts[:3]
+
+            logger.warning(f"BOARDNAK received: board={board_name} reason={reason} from {sender}")
+
+            key = (board_name, sender)
+            if key in self._pending_board_sync:
+                del self._pending_board_sync[key]
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling BOARDNAK: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def _handle_boarddat(self, message: str, sender: str) -> bool:
+        """Handle BOARDDAT — receive post data chunk.
+
+        Format: BOARDDAT|board_name|seq/total|data
+        """
+        try:
+            parts = message.split("|", 3)
+            if len(parts) < 4:
+                return False
+
+            _, board_name, part_info, data = parts
+            part_num, total_parts = map(int, part_info.split("/"))
+
+            logger.info(f"BOARDDAT received: board={board_name} part {part_num}/{total_parts} from {sender}")
+
+            key = (board_name, sender)
+            if key not in self._incoming_board_sync:
+                logger.warning(f"BOARDDAT: No pending incoming board sync for {board_name} from {sender}")
+                return False
+
+            incoming = self._incoming_board_sync[key]
+            incoming["num_parts"] = total_parts
+            incoming["received_parts"][part_num] = data
+
+            logger.info(f"BOARDDAT: Stored part {part_num}, have {len(incoming['received_parts'])}/{total_parts}")
+
+            # Check if all parts received
+            if len(incoming["received_parts"]) >= total_parts:
+                if not incoming.get("delivering"):
+                    incoming["delivering"] = True
+                    logger.info(f"BOARDDAT: All parts received for {board_name}, delivering")
+                    self._schedule_async(self._deliver_board_posts(key, incoming))
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling BOARDDAT: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def _handle_boarddlv(self, message: str, sender: str) -> bool:
+        """Handle BOARDDLV — delivery confirmation from peer.
+
+        Format: BOARDDLV|board_name|OK
+        """
+        try:
+            parts = message.split("|")
+            if len(parts) < 3:
+                return False
+
+            _, board_name, status = parts[:3]
+
+            logger.info(f"BOARDDLV received: board={board_name} status={status} from {sender}")
+
+            key = (board_name, sender)
+            if key in self._pending_board_sync:
+                del self._pending_board_sync[key]
+                logger.info(f"BOARDDLV: Board sync for {board_name} delivered to {sender}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error handling BOARDDLV: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    async def _send_board_chunks(self, board_name: str, chunks: list[str], dest_node: str):
+        """Send board post data chunks to a peer."""
+        import random
+        total = len(chunks)
+        max_retries = 3
+
+        # Initial delay to avoid TX queue collision after BOARDACK
+        await asyncio.sleep(self._protocol_delay)
+
+        for i, chunk in enumerate(chunks, 1):
+            boarddat = f"BOARDDAT|{board_name}|{i}/{total}|{chunk}"
+
+            success = False
+            for attempt in range(max_retries):
+                acked, error = await self.mesh.send_dm_wait_ack(boarddat, dest_node, timeout=30.0)
+                if acked:
+                    logger.debug(f"BOARDDAT {board_name} chunk {i}/{total} ACKed")
+                    success = True
+                    break
+                else:
+                    logger.warning(f"BOARDDAT {board_name} chunk {i}/{total} failed: {error} (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(random.uniform(3.0, 5.0))
+
+            if not success:
+                logger.error(f"BOARDDAT {board_name} chunk {i}/{total} failed after {max_retries} attempts to {dest_node}")
+                return  # Abort — peer will time out and clean up
+
+            if i < total:
+                await asyncio.sleep(random.uniform(2.2, 2.6))
+
+        logger.info(f"Sent {total} board chunks for {board_name} to {dest_node}, awaiting BOARDDLV")
+
+    async def _deliver_board_posts(self, key: tuple, incoming: dict):
+        """Reassemble and store board posts received from a peer.
+
+        Multi-post payload: records joined by \\x1F, fields by \\x1E:
+        uuid\\x1Eauthor\\x1Eorigin_bbs\\x1Etimestamp_us\\x1Esubject\\x1Ebody
+        """
+        try:
+            # Reassemble data from chunks
+            body_parts = []
+            for i in range(1, incoming["num_parts"] + 1):
+                if i in incoming["received_parts"]:
+                    body_parts.append(incoming["received_parts"][i])
+            raw_data = "".join(body_parts)
+
+            board_name = incoming["board_name"]
+            board_id = incoming["board_id"]
+            sender_node_id = incoming["sender_node"]
+
+            # Split into individual records
+            records = raw_data.split("\x1f")
+
+            from ..db.messages import MessageRepository
+            from ..db.users import NodeRepository
+            from ..db.models import MessageType
+
+            msg_repo = MessageRepository(self.db)
+            node_repo = NodeRepository(self.db)
+            sender_node = node_repo.get_or_create_node(sender_node_id)
+
+            stored = 0
+            skipped = 0
+
+            for record in records:
+                fields = record.split("\x1e")
+                if len(fields) < 6:
+                    logger.warning(f"Skipping malformed board sync record ({len(fields)} fields)")
+                    continue
+
+                msg_uuid, author, origin_bbs, timestamp_us_str, subject, body = fields[:6]
+
+                # Dedup check
+                if msg_repo.message_exists(msg_uuid):
+                    skipped += 1
+                    continue
+
+                # Encrypt with our master key
+                board_key = self.bbs.master_key.key
+                subject_enc = self.bbs.crypto.encrypt_string(subject, board_key) if subject else None
+                body_enc = self.bbs.crypto.encrypt_string(body, board_key)
+
+                expires_at_us = int((time.time() + 90 * 86400) * 1_000_000)
+
+                msg_repo.create_message(
+                    msg_type=MessageType.BULLETIN,
+                    sender_node_id=sender_node.id,
+                    board_id=board_id,
+                    subject_enc=subject_enc,
+                    body_enc=body_enc,
+                    origin_bbs=origin_bbs,
+                    message_uuid=msg_uuid,
+                    expires_at_us=expires_at_us,
+                    forwarded_to=f"{author}@{origin_bbs}",
+                )
+                stored += 1
+
+            logger.info(f"Board sync delivery for {board_name}: stored={stored}, skipped={skipped}")
+
+            # Send delivery confirmation
+            dlv = f"BOARDDLV|{board_name}|OK"
+            await self._send_protocol_dm(dlv, sender_node_id)
+            logger.info(f"Sent BOARDDLV for {board_name} to {sender_node_id}")
+
+            # Clean up
+            if key in self._incoming_board_sync:
+                del self._incoming_board_sync[key]
+
+        except Exception as e:
+            logger.error(f"Error delivering board posts for {key}: {e}")
+            logger.error(traceback.format_exc())
+
+    def notify_new_local_post(self, board_name: str):
+        """Increment board sync counter. Actual sync happens in tick()."""
+        self._board_sync_counters[board_name] = self._board_sync_counters.get(board_name, 0) + 1
+        logger.info(f"Board sync counter: {board_name} = {self._board_sync_counters[board_name]}")
+
+    async def _sync_boards_to_peers(self):
+        """Flush batched board sync counters — send posts to all enabled peers."""
+        if not self.config.enabled or not self._peers:
+            self._board_sync_counters = {}
+            self._last_board_sync_time = time.time()
+            return
+
+        from ..core.boards import BoardRepository
+        from ..db.messages import MessageRepository
+        from ..db.users import UserRepository
+
+        board_repo = BoardRepository(self.db)
+        msg_repo = MessageRepository(self.db)
+        user_repo = UserRepository(self.db)
+        my_callsign = self.bbs.config.bbs.callsign
+
+        synced_boards = board_repo.get_synced_boards()
+        boards_by_name = {b.name: b for b in synced_boards}
+
+        for board_name, count in self._board_sync_counters.items():
+            if count <= 0:
+                continue
+
+            board = boards_by_name.get(board_name)
+            if not board:
+                continue
+
+            for node_id, peer in self._peers.items():
+                if not peer.enabled:
+                    continue
+
+                # Get last_board_sync_us for this peer
+                peer_row = self.db.fetchone(
+                    "SELECT last_board_sync_us FROM bbs_peers WHERE node_id = ?",
+                    (node_id,)
+                )
+                since_us = (peer_row[0] or 0) if peer_row else 0
+
+                # Get our local posts since last sync
+                messages = msg_repo.get_board_messages(
+                    board.id, since_us=since_us, limit=1000
+                )
+                # Filter to only our local posts
+                our_posts = [m for m in messages if m.origin_bbs == my_callsign]
+
+                if not our_posts:
+                    continue
+
+                # Build multi-post payload
+                records = []
+                max_ts = since_us
+                for msg in our_posts:
+                    # Decrypt subject/body for transit
+                    board_key = self.bbs.master_key.key
+                    subject = self.bbs.crypto.decrypt_string(msg.subject_enc, board_key) if msg.subject_enc else ""
+                    body = self.bbs.crypto.decrypt_string(msg.body_enc, board_key) if msg.body_enc else ""
+
+                    author = user_repo.get_user_by_id(msg.sender_user_id)
+                    author_name = author.username if author else "unknown"
+
+                    # Record: uuid\x1Eauthor\x1Eorigin_bbs\x1Etimestamp_us\x1Esubject\x1Ebody
+                    record = f"{msg.uuid}\x1e{author_name}\x1e{my_callsign}\x1e{msg.created_at_us}\x1e{subject}\x1e{body}"
+                    records.append(record)
+
+                    if msg.created_at_us > max_ts:
+                        max_ts = msg.created_at_us
+
+                payload = "\x1f".join(records)
+                chunks = self._chunk_message(payload, 150)
+                num_parts = len(chunks)
+
+                # Store pending state
+                key = (board_name, node_id)
+                self._pending_board_sync[key] = {
+                    "chunks": chunks,
+                    "state": "pending",
+                    "timestamp": time.time(),
+                    "max_ts": max_ts,
+                }
+
+                # Send BOARDREQ|board_name|count|since_us
+                boardreq = f"BOARDREQ|{board_name}|{len(our_posts)}|{since_us}"
+                self._schedule_async(self._send_protocol_dm(boardreq, node_id))
+
+                logger.info(f"Board sync: {board_name} sending {len(our_posts)} post(s) to {node_id}")
+
+                # Update last_board_sync_us for this peer
+                self.db.execute(
+                    "UPDATE bbs_peers SET last_board_sync_us = ? WHERE node_id = ?",
+                    (max_ts, node_id)
+                )
+
+        self._board_sync_counters = {}
+        self._last_board_sync_time = time.time()

@@ -66,6 +66,13 @@ class MeshInterface:
         self._last_send_time = 0
         self._send_min_interval = 3.5  # seconds between consecutive sends
 
+        # Reconnection state
+        self._reconnect_attempts = 0
+        self._reconnecting = False
+
+        # Event loop reference for thread-safe ACK signaling
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+
     @property
     def connected(self) -> bool:
         """Check if connected to Meshtastic device."""
@@ -75,6 +82,10 @@ class MeshInterface:
     def node_id(self) -> Optional[str]:
         """Get our node ID."""
         return self._node_id
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop):
+        """Set the asyncio event loop reference for thread-safe signaling."""
+        self._event_loop = loop
 
     def connect(self):
         """Establish connection to Meshtastic device."""
@@ -235,12 +246,27 @@ class MeshInterface:
                 logger.warning(
                     f"MESH NAK to {pending['destination']}: {error_reason} ({elapsed_ms:.0f}ms)"
                 )
+                is_ack = False
             else:
                 # ACK - delivery confirmed
                 self._ack_stats["acked"] += 1
                 logger.info(
                     f"MESH ACK from {pending['destination']} ({elapsed_ms:.0f}ms)"
                 )
+                is_ack = True
+
+            # Signal any waiting send_dm_wait_ack callers
+            event = pending.get("event")
+            result = pending.get("result")
+            if event and result is not None:
+                result["success"] = is_ack
+                if not is_ack:
+                    result["error"] = error_reason
+                # Signal from event loop thread (this callback runs on Meshtastic's thread)
+                if self._event_loop and self._event_loop.is_running():
+                    self._event_loop.call_soon_threadsafe(event.set)
+                else:
+                    event.set()
         elif request_id:
             # Log untracked ACKs for debugging
             routing = decoded.get("routing", {})
@@ -342,7 +368,7 @@ class MeshInterface:
             if elapsed < self._send_min_interval:
                 wait_time = self._send_min_interval - elapsed
                 logger.debug(f"Rate limiting: waiting {wait_time:.1f}s before send")
-                time.sleep(wait_time)
+                await asyncio.sleep(wait_time)
             self._last_send_time = time.time()
 
             logger.info(f"Sending to {destination} on channel {channel}: {text[:50]}...")
@@ -465,6 +491,19 @@ class MeshInterface:
             return False, "NOT_CONNECTED"
 
         try:
+            # Rate limit sends to avoid meshtasticd drops
+            now = time.time()
+            elapsed = now - self._last_send_time
+            if elapsed < self._send_min_interval:
+                wait_time = self._send_min_interval - elapsed
+                logger.debug(f"Rate limiting send_dm_wait_ack: waiting {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+            self._last_send_time = time.time()
+
+            logger.info(f"Sending DM to {destination}: {text[:50]}...")
+            if text.startswith(("MAILREQ|", "MAILACK|", "MAILNAK|", "MAILDAT|", "MAILDLV|", "advBBS|")):
+                logger.info(f"SYNC PROTOCOL SENDING ({len(text)} chars): {text}")
+
             # Send with ACK request
             result = self._interface.sendText(
                 text=text,
@@ -476,10 +515,6 @@ class MeshInterface:
             request_id = getattr(result, "id", None)
             if not request_id:
                 return False, "NO_REQUEST_ID"
-
-            # Log for sync protocol messages
-            if text.startswith(("MAILREQ|", "MAILACK|", "MAILNAK|", "MAILDAT|", "MAILDLV|", "advBBS|")):
-                logger.info(f"SYNC PROTOCOL SENDING ({len(text)} chars): {text}")
 
             logger.debug(f"Waiting for ACK on msg {request_id} to {destination}")
 

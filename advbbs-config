@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FQ51BBS Configuration Tool Launcher
+advBBS Configuration Tool Launcher
 
 Simple launcher for the Rich-based configuration interface.
 """
@@ -10,10 +10,10 @@ import os
 
 # Add package to path if running from source
 script_dir = os.path.dirname(os.path.abspath(__file__))
-if os.path.exists(os.path.join(script_dir, "fq51bbs")):
+if os.path.exists(os.path.join(script_dir, "advbbs")):
     sys.path.insert(0, script_dir)
 
-from fq51bbs.cli.config_rich import main
+from advbbs.cli.config_rich import main
 
 if __name__ == "__main__":
     main()

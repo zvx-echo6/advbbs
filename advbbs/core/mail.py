@@ -8,6 +8,7 @@ Per architecture: 3 attempts (30s ACK timeout), 60s/120s backoff, then forward.
 import time
 import logging
 import asyncio
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
@@ -292,7 +293,6 @@ class MailService:
             return message, ""
 
         except Exception as e:
-            import traceback
             logger.error(f"Mail compose error: {e}\n{traceback.format_exc()}")
             return None, "Failed to compose mail."
 
@@ -380,7 +380,6 @@ class MailService:
 
         except Exception as e:
             logger.error(f"Mail read error: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             return None, "Failed to read message."
 

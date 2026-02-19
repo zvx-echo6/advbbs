@@ -111,6 +111,7 @@ class Board:
     is_restricted: bool = False
     board_type: BoardType = BoardType.PUBLIC
     board_key_enc: Optional[bytes] = None
+    sync_enabled: bool = False
 
 
 @dataclass
@@ -139,7 +140,7 @@ class BBSPeer:
     id: Optional[int] = None
     node_id: str = ""
     bbs_name: Optional[str] = None
-    protocol: str = "advbbs"  # tc2 | meshing-around | advbbs
+    protocol: str = "advbbs"
     last_sync_us: Optional[int] = None
     sync_enabled: bool = True
     trust_level: int = 0  # 0=untrusted, 1=trusted, 2=full

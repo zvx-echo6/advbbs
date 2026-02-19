@@ -26,9 +26,10 @@ MAX_SUBJECT_LENGTH = 64
 MAX_BODY_LENGTH = 2000
 BULLETIN_EXPIRY_DAYS = 90
 
-# Sync boards - these are the only boards that sync between BBS nodes
-# and can be read without login
-SYNC_BOARDS = ["general", "help"]
+# Legacy constant — sync boards are now tracked via the sync_enabled column
+# in the boards table (see migration 004). Kept for reference only.
+# Use BoardRepository.get_synced_boards() instead.
+SYNC_BOARDS = ["general"]
 
 
 @dataclass
@@ -88,22 +89,24 @@ class BoardRepository:
         name: str,
         description: Optional[str] = None,
         is_restricted: bool = False,
-        board_key_enc: Optional[bytes] = None
+        board_key_enc: Optional[bytes] = None,
+        sync_enabled: bool = False
     ) -> Board:
         """Create a new board."""
         now_us = int(time.time() * 1_000_000)
         board_type = BoardType.RESTRICTED if is_restricted else BoardType.PUBLIC
 
         cursor = self.db.execute("""
-            INSERT INTO boards (name, description, created_at_us, is_restricted, board_type, board_key_enc)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO boards (name, description, created_at_us, is_restricted, board_type, board_key_enc, sync_enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             name.lower(),
             description,
             now_us,
             1 if is_restricted else 0,
             board_type.value,
-            board_key_enc
+            board_key_enc,
+            1 if sync_enabled else 0
         ))
 
         return Board(
@@ -113,7 +116,8 @@ class BoardRepository:
             created_at_us=now_us,
             is_restricted=is_restricted,
             board_type=board_type,
-            board_key_enc=board_key_enc
+            board_key_enc=board_key_enc,
+            sync_enabled=sync_enabled,
         )
 
     def delete_board(self, board_id: int) -> bool:
@@ -206,8 +210,35 @@ class BoardRepository:
             VALUES (?, ?, ?)
         """, (board_id, user_id, last_read_us))
 
+    def get_synced_boards(self) -> list[Board]:
+        """Get boards with sync_enabled = 1."""
+        rows = self.db.fetchall(
+            "SELECT * FROM boards WHERE sync_enabled = 1 ORDER BY name"
+        )
+        return [self._row_to_board(row) for row in rows]
+
+    def count_synced_boards(self) -> int:
+        """Count boards with sync enabled."""
+        row = self.db.fetchone(
+            "SELECT COUNT(*) FROM boards WHERE sync_enabled = 1"
+        )
+        return row[0] if row else 0
+
+    def set_board_sync(self, board_id: int, enabled: bool):
+        """Enable or disable sync on a board."""
+        self.db.execute(
+            "UPDATE boards SET sync_enabled = ? WHERE id = ?",
+            (1 if enabled else 0, board_id)
+        )
+
     def _row_to_board(self, row) -> Board:
         """Convert database row to Board object."""
+        # sync_enabled may not exist on older databases
+        try:
+            sync_enabled = bool(row["sync_enabled"])
+        except (IndexError, KeyError):
+            sync_enabled = False
+
         return Board(
             id=row["id"],
             name=row["name"],
@@ -215,7 +246,8 @@ class BoardRepository:
             created_at_us=row["created_at_us"],
             is_restricted=bool(row["is_restricted"]),
             board_type=BoardType(row["board_type"]),
-            board_key_enc=row["board_key_enc"]
+            board_key_enc=row["board_key_enc"],
+            sync_enabled=sync_enabled,
         )
 
 
@@ -268,7 +300,8 @@ class BoardService:
                 "description": board.description or "",
                 "posts": post_count,
                 "unread": unread,
-                "restricted": board.is_restricted
+                "restricted": board.is_restricted,
+                "sync_enabled": board.sync_enabled,
             })
 
         return result
@@ -324,6 +357,13 @@ class BoardService:
             # Get author info
             author = user_repo.get_user_by_id(msg.sender_user_id) if msg.sender_user_id else None
             author_name = author.username if author else "anonymous"
+
+            # Append @BBS for remote posts
+            if msg.origin_bbs and msg.origin_bbs != self.bbs.config.bbs.callsign:
+                if msg.forwarded_to and "@" in msg.forwarded_to:
+                    author_name = msg.forwarded_to  # Already "user@BBS" format
+                else:
+                    author_name = f"unknown@{msg.origin_bbs}"
 
             # Try to decrypt subject for display
             subject = self._decrypt_field(msg.subject_enc, board, user_id) if msg.subject_enc else "(no subject)"
@@ -384,6 +424,13 @@ class BoardService:
         # Get author info
         author = user_repo.get_user_by_id(msg.sender_user_id) if msg.sender_user_id else None
         author_name = author.username if author else "anonymous"
+
+        # Append @BBS for remote posts
+        if msg.origin_bbs and msg.origin_bbs != self.bbs.config.bbs.callsign:
+            if msg.forwarded_to and "@" in msg.forwarded_to:
+                author_name = msg.forwarded_to  # Already "user@BBS" format
+            else:
+                author_name = f"unknown@{msg.origin_bbs}"
 
         # Decrypt content
         subject = self._decrypt_field(msg.subject_enc, board, user_id) if msg.subject_enc else "(no subject)"
@@ -477,6 +524,14 @@ class BoardService:
             )
 
             logger.info(f"Post created on {board.name} by user {user_id}")
+
+            # Notify sync manager for synced boards
+            if board.sync_enabled and hasattr(self.bbs, 'sync_manager') and self.bbs.sync_manager:
+                try:
+                    self.bbs.sync_manager.notify_new_local_post(board.name)
+                except Exception as sync_err:
+                    logger.error(f"Board sync notification failed: {sync_err}")
+
             return message, ""
 
         except Exception as e:

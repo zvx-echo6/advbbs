@@ -43,12 +43,12 @@ class TestBoardListing:
         """Test listing default boards."""
         boards = self.board_service.list_boards()
 
-        # Default boards from migration
+        # Default boards from migrations (general, help from 001; local from 004)
         assert len(boards) >= 3
         board_names = [b["name"] for b in boards]
         assert "general" in board_names
-        assert "news" in board_names
         assert "help" in board_names
+        assert "local" in board_names
 
     def test_board_list_includes_counts(self):
         """Test that board list includes post counts."""

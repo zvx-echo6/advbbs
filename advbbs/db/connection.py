@@ -81,6 +81,7 @@ class Database:
             ("001_initial", self._migration_001_initial),
             ("002_settings_and_maintenance", self._migration_002_settings),
             ("003_rap", self._migration_003_rap),
+            ("004_board_sync", self._migration_004_board_sync),
         ]
 
         for name, func in migrations:
@@ -225,7 +226,7 @@ class Database:
             INSERT OR IGNORE INTO boards (name, description, created_at_us, board_type)
             VALUES
                 ('general', 'General discussion (synced)', strftime('%s', 'now') * 1000000, 'public'),
-                ('help', 'Help and Support (synced)', strftime('%s', 'now') * 1000000, 'public');
+                ('help', 'Help and Support', strftime('%s', 'now') * 1000000, 'public');
         """)
 
     @contextmanager
@@ -385,3 +386,32 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_rap_pending_dest ON rap_pending_mail(recipient_bbs);
             CREATE INDEX IF NOT EXISTS idx_rap_pending_expires ON rap_pending_mail(expires_at_us);
         """)
+
+    def _migration_004_board_sync(self):
+        """Add board sync support (sync_enabled column, local board)."""
+        # Add sync_enabled column to boards
+        try:
+            self._conn.execute(
+                "ALTER TABLE boards ADD COLUMN sync_enabled INTEGER DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Mark general as synced
+        self._conn.execute(
+            "UPDATE boards SET sync_enabled = 1 WHERE name = 'general'"
+        )
+
+        # Create 'local' board if it doesn't exist
+        self._conn.execute("""
+            INSERT OR IGNORE INTO boards (name, description, created_at_us, board_type, sync_enabled)
+            VALUES ('local', 'Local discussion', strftime('%s', 'now') * 1000000, 'public', 0)
+        """)
+
+        # Add last_board_sync_us to bbs_peers
+        try:
+            self._conn.execute(
+                "ALTER TABLE bbs_peers ADD COLUMN last_board_sync_us INTEGER"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists

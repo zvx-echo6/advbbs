@@ -36,7 +36,7 @@ enabled = true
 **Important fields:**
 - `node_id` - The Meshtastic node ID (e.g., `!abc12345`)
 - `name` - The BBS callsign used in `user@BBS` mail addressing
-- `protocol` - Currently only `fq51` is supported
+- `protocol` - Currently only `advbbs` is supported
 
 ## What Syncs
 
@@ -302,19 +302,6 @@ CREATE TABLE sync_log (
 
 ---
 
-## Compatibility
+## Protocol
 
-### Current Status
-
-| BBS System | Status |
-|------------|--------|
-| advBBS | ✅ Implemented |
-| TC2-BBS-mesh | 🔜 Planned |
-| meshing-around | 🔜 Planned |
-| frozenbbs | ❌ No protocol exists |
-
-### Design Philosophy
-
-advBBS is designed as a **polyglot BBS** - it can speak each external system's native protocol. We don't try to change how other BBS systems work; we participate as a peer in their existing networks.
-
-Currently only advBBS-to-advBBS sync is implemented.
+advBBS uses its own native DM-based protocol for all inter-BBS communication. Only advBBS-to-advBBS federation is supported.

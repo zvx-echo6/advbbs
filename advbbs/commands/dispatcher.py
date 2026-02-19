@@ -274,9 +274,11 @@ class CommandDispatcher:
 
         # Check if login required for this board
         if not session.get("user_id"):
-            # Check if it's a sync board (general/help)
-            from ..core.boards import SYNC_BOARDS
-            if board_name.lower() not in [b.lower() for b in SYNC_BOARDS]:
+            # Check if it's a synced board (allows anonymous read/post)
+            from ..core.boards import BoardRepository
+            board_repo = BoardRepository(self.bbs.db)
+            board_obj = board_repo.get_board_by_id(board_id)
+            if not board_obj or not board_obj.sync_enabled:
                 return f"Login required to post to {board_name}."
 
         # Post to the board
@@ -342,8 +344,8 @@ class CommandDispatcher:
         return True
 
     def _is_on_sync_board(self, session: dict) -> bool:
-        """Check if user is currently in a sync board (general/help)."""
-        from ..core.boards import SYNC_BOARDS, BoardRepository
+        """Check if user is currently in a synced board."""
+        from ..core.boards import BoardRepository
 
         board_id = session.get("current_board")
         if not board_id:
@@ -354,7 +356,7 @@ class CommandDispatcher:
         if not board:
             return False
 
-        return board.name.lower() in SYNC_BOARDS
+        return board.sync_enabled
 
     # === Command Handlers ===
 

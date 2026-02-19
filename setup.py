@@ -14,7 +14,7 @@ setup(
     description="Lightweight BBS for Meshtastic Mesh Networks",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://forge.echo6.co/advbbs/advbbs",
+    url="https://github.com/zvx-echo6/advbbs",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",

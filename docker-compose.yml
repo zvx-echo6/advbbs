@@ -1,7 +1,6 @@
 # advBBS docker compose
-# 
+#
 # Usage:
-#   ./setup.sh                            # Run setup first
 #   docker compose up -d                  # Start BBS + web config
 #   docker compose logs -f                # View logs
 #

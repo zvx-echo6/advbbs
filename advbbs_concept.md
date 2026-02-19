@@ -13,10 +13,7 @@ advBBS is a custom built, low overhead, amalgamation of concepts pulled form man
 ## Priority 1 Goals
 - A fully functional BBS in its own right drawing on proven concepts from mesh projects and ham radio
 - It's own linking network
-- Capable of sending to and receiving from:
-   - meshing-around
-   - TC2-BBS-mesh
-   - frozenbbs
+- Its own advBBS-to-advBBS federation network (inspired by meshing-around, TC2-BBS-mesh, and frozenbbs)
 - Fully enabled encryption at rest for all stored messages
 - A fully encrypted registration system for users to login with and associate nodeIDs with and send and retrieve messages.
 -Understand that this whole thing should be CLI
@@ -75,10 +72,5 @@ Above all else, the health of the mesh is paramount. We do not spam and flood th
 ###Notes for reference:
 
 Meshtastic documentation (including API information) can be found here: https://meshtastic.org/docs/getting-started/
-
-Include DEVA and Delta7 for assistance in their specialization.
-Engage SERA to save and document every step.
-Utilize UIX to assist with UI and UX development. This is CLI so here will be nuances.
-Use MAVEN to plan and work through issues.
 
 Remember, this should run well on a RPi Zero 2 W and should not put it under load.

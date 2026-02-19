@@ -287,8 +287,8 @@ class Config:
 
         # Sync peer validation
         for peer in self.sync.peers:
-            if peer.protocol not in ["tc2", "meshing-around", "advbbs"]:
-                errors.append(f"Invalid protocol '{peer.protocol}' for peer {peer.name}")
+            if peer.protocol != "advbbs":
+                errors.append(f"Invalid protocol '{peer.protocol}' for peer {peer.name} (only 'advbbs' is supported)")
 
         return errors
 

@@ -86,14 +86,6 @@ rap_stale_route_minutes = 120  # Remove routes not seen in this time
 
 Basic read-only web interface for viewing boards and mail (already partially implemented, disabled by default).
 
-### TC2-BBS Compatibility
-
-Protocol adapter to communicate with TC2-BBS-mesh nodes using their native protocol.
-
-### meshing-around Compatibility
-
-Protocol adapter to communicate with meshing-around BBS nodes.
-
 ---
 
 ## Contributing

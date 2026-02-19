@@ -5,6 +5,7 @@ CRUD operations for messages (mail and bulletins).
 """
 
 import time
+import traceback
 import uuid
 import logging
 from typing import Optional
@@ -33,7 +34,8 @@ class MessageRepository:
         subject_enc: Optional[bytes] = None,
         origin_bbs: Optional[str] = None,
         message_uuid: Optional[str] = None,
-        expires_at_us: Optional[int] = None
+        expires_at_us: Optional[int] = None,
+        forwarded_to: Optional[str] = None
     ) -> Message:
         """Create a new message."""
         now_us = int(time.time() * 1_000_000)
@@ -43,8 +45,8 @@ class MessageRepository:
             INSERT INTO messages (
                 uuid, msg_type, board_id, sender_user_id, sender_node_id,
                 recipient_user_id, recipient_node_id, subject_enc, body_enc,
-                created_at_us, origin_bbs, expires_at_us
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at_us, origin_bbs, expires_at_us, forwarded_to
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             msg_uuid,
             msg_type.value,
@@ -57,7 +59,8 @@ class MessageRepository:
             body_enc,
             now_us,
             origin_bbs,
-            expires_at_us
+            expires_at_us,
+            forwarded_to
         ))
 
         return Message(
@@ -73,7 +76,8 @@ class MessageRepository:
             body_enc=body_enc,
             created_at_us=now_us,
             origin_bbs=origin_bbs,
-            expires_at_us=expires_at_us
+            expires_at_us=expires_at_us,
+            forwarded_to=forwarded_to
         )
 
     def get_message_by_id(self, message_id: int) -> Optional[Message]:
@@ -387,8 +391,8 @@ class MessageRepository:
 
         # Check for duplicate
         if self.message_exists(uuid):
-            logger.debug(f"Remote mail {uuid[:8]} already exists, skipping")
-            return None
+            logger.info(f"Remote mail {uuid[:8]} already exists (duplicate), skipping")
+            return "duplicate"
 
         try:
             # Store sender info in a way read_mail can parse
@@ -425,6 +429,7 @@ class MessageRepository:
 
         except Exception as e:
             logger.error(f"Failed to store incoming remote mail: {e}")
+            logger.error(traceback.format_exc())
             return None
 
     def get_pending_remote_mail(self, limit: int = 10) -> list[Message]:

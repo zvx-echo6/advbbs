@@ -194,6 +194,11 @@ class advBBS:
         """Main async event loop."""
         # Store event loop reference for thread-safe callbacks
         self._loop = asyncio.get_running_loop()
+
+        # Give mesh interface a reference to our event loop for thread-safe ACK signaling
+        if self.mesh:
+            self.mesh.set_event_loop(self._loop)
+
         logger.info(f"{self.config.bbs.name} is now running")
 
         # Start mail delivery worker
