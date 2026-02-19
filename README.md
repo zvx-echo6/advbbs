@@ -137,6 +137,7 @@ Short aliases are shown in parentheses for quick typing on mobile.
 | `!mkboard <name> [desc]` (`!mb`) | Create board |
 | `!rmboard <name>` (`!rb`) | Delete board |
 | `!announce <msg>` (`!ann`) | Broadcast message |
+| `!boardsync` (`!bs`) | Force board sync to peers |
 
 ### Account
 | Command | Description |

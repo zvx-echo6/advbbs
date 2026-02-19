@@ -108,6 +108,8 @@ class CommandDispatcher:
         self.register("RESETPW", self.cmd_resetpw, "admin", "Reset password: RESETPW <user> <newpass>")
         self.register("KICK", self.cmd_kick, "admin", "Force logout: KICK <user>")
         self.register("SETNODE", self.cmd_setnode, "admin", "Manage nodes: SETNODE <user> <add|rm|reset> [node]")
+        self.register("BOARDSYNC", self.cmd_boardsync, "admin", "Force board sync: BOARDSYNC")
+        self.register("BS", self.cmd_boardsync, "admin", "Force board sync (short)")
 
         # Self-destruct
         self.register("DESTRUCT", self.cmd_destruct, "authenticated", "Delete all your data")
@@ -380,7 +382,8 @@ class CommandDispatcher:
                 "!setnode user add|rm|reset [node]\n"
                 "!mkboard name [desc] - Create board\n"
                 "!rmboard name - Delete board\n"
-                "!announce msg - Broadcast"
+                "!announce msg - Broadcast\n"
+                "!boardsync [full] - Force board sync"
             )
 
         # Build help messages - each under 175 chars
@@ -1486,6 +1489,33 @@ class CommandDispatcher:
             return f"All {len(nodes)} node(s) removed from {username}."
 
         return "Unknown action. Use: add, rm, reset"
+
+    def cmd_boardsync(self, sender: str, args: str, session: dict, channel: int) -> str:
+        """Force an immediate board sync to all peers (admin only)."""
+        if not self.bbs.sync_manager:
+            return "Sync not enabled."
+
+        # Reset the last sync time and seed counters for all synced boards
+        from ..core.boards import BoardRepository
+        board_repo = BoardRepository(self.bbs.db)
+        synced_boards = board_repo.get_synced_boards()
+
+        if not synced_boards:
+            return "No synced boards configured."
+
+        for board in synced_boards:
+            self.bbs.sync_manager._board_sync_counters[board.name] = \
+                self.bbs.sync_manager._board_sync_counters.get(board.name, 0) + 1
+
+        # Reset timer so next tick triggers immediately
+        self.bbs.sync_manager._last_board_sync_time = 0.0
+
+        # Optionally reset peer timestamps to force full resync
+        if args.strip().lower() == "full":
+            self.bbs.db.execute("UPDATE bbs_peers SET last_board_sync_us = 0")
+            return f"Full board sync queued for {len(synced_boards)} board(s). All posts will be re-sent."
+
+        return f"Board sync queued for {len(synced_boards)} board(s). Will fire on next tick (~60s)."
 
     def cmd_destruct(self, sender: str, args: str, session: dict, channel: int) -> str:
         """Delete all user data."""

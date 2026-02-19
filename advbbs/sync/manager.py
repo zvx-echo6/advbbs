@@ -70,6 +70,9 @@ class SyncManager:
         # Board sync — inbound (receiving chunks from peer)
         self._incoming_board_sync = {}    # (board_name, sender_node_id) -> {num_parts, received_parts, timestamp}
 
+        # Track delivered board syncs to prevent retry loops from overwriting success
+        self._delivered_board_sync = set()  # (board_name, peer_node_id) tuples
+
         # MAILREQ retry configuration (from config)
         self._mailreq_retry_intervals = [30, 60, 90]  # seconds between retries
         self._mailreq_max_attempts = config.mail_retry_attempts
@@ -190,6 +193,15 @@ class SyncManager:
 
         # Clean up stale incoming board sync (incomplete chunk reception)
         await self._cleanup_stale_incoming_board_sync()
+
+        # Retry pending board sync requests
+        await self._retry_pending_boardreq()
+
+        # Retry pending board sync delivery confirmations
+        await self._retry_pending_boarddlv()
+
+        # Clean up stale outbound board sync entries
+        await self._cleanup_stale_pending_board_sync()
 
         # Board sync batching: flush when counter >= 10 OR (>= 1 AND 1hr elapsed)
         total = sum(self._board_sync_counters.values())
@@ -501,6 +513,132 @@ class SyncManager:
 
         for key in to_remove:
             del self._incoming_board_sync[key]
+
+    async def _retry_pending_boardreq(self):
+        """Retry pending BOARDREQ messages that haven't received BOARDACK."""
+        now = time.time()
+        to_remove = []
+        max_attempts = 3
+        retry_intervals = [30, 60, 90]
+
+        for key, pending in list(self._pending_board_sync.items()):
+            # Skip entries already sending/sent chunks
+            if pending.get("state") in ("sending", "chunks_sent", "delivered"):
+                continue
+
+            # Skip if not ready for retry
+            if now < pending.get("next_retry", 0):
+                continue
+
+            attempts = pending.get("attempts", 1)
+            boardreq = pending.get("boardreq")
+
+            if not boardreq:
+                continue
+
+            # Check if we've exceeded max attempts
+            if attempts >= max_attempts:
+                board_name = key[0]
+                logger.warning(f"BOARDREQ {board_name} failed after {attempts} attempts to {key[1]}, giving up")
+                to_remove.append(key)
+                continue
+
+            # Retry
+            dest_node = pending["dest_node"]
+            try:
+                await self.mesh.send_dm(boardreq, dest_node)
+                pending["attempts"] = attempts + 1
+                retry_idx = min(attempts, len(retry_intervals) - 1)
+                pending["next_retry"] = now + retry_intervals[retry_idx]
+                logger.info(f"Retried BOARDREQ for {key[0]} to {dest_node} (attempt {pending['attempts']}/{max_attempts})")
+            except Exception as e:
+                logger.error(f"Failed to retry BOARDREQ {key[0]}: {e}")
+
+        for key in to_remove:
+            del self._pending_board_sync[key]
+
+    async def _retry_pending_boarddlv(self):
+        """Retry board chunk sends if BOARDDLV not received."""
+        now = time.time()
+        to_remove = []
+        max_dlv_attempts = 3
+        dlv_retry_intervals = [60, 120, 180]
+
+        for key, pending in list(self._pending_board_sync.items()):
+            # Only retry entries waiting for BOARDDLV
+            if pending.get("state") != "chunks_sent":
+                continue
+
+            # Skip if already delivered
+            if key in self._delivered_board_sync:
+                to_remove.append(key)
+                continue
+
+            # Skip if not ready for retry
+            if now < pending.get("next_dlv_retry", 0):
+                continue
+
+            dlv_attempts = pending.get("dlv_attempts", 1)
+
+            if dlv_attempts >= max_dlv_attempts:
+                board_name = key[0]
+                logger.warning(f"BOARDDLV {board_name} not received after {dlv_attempts} attempts to {key[1]}, giving up")
+                to_remove.append(key)
+                continue
+
+            # Resend all chunks
+            board_name = key[0]
+            dest_node = key[1]
+            chunks = pending.get("chunks", [])
+
+            try:
+                logger.info(f"Retrying BOARDDAT chunks for {board_name} to {dest_node} (BOARDDLV attempt {dlv_attempts + 1}/{max_dlv_attempts})")
+                self._schedule_async(self._resend_board_chunks(board_name, chunks, dest_node))
+                pending["dlv_attempts"] = dlv_attempts + 1
+                retry_idx = min(dlv_attempts, len(dlv_retry_intervals) - 1)
+                pending["next_dlv_retry"] = now + dlv_retry_intervals[retry_idx]
+            except Exception as e:
+                logger.error(f"Failed to retry BOARDDAT {board_name}: {e}")
+
+        for key in to_remove:
+            del self._pending_board_sync[key]
+
+    async def _resend_board_chunks(self, board_name: str, chunks: list[str], dest_node: str):
+        """Resend board chunks (fewer retries per chunk on resend)."""
+        import random
+        total = len(chunks)
+        max_retries = 2
+
+        for i, chunk in enumerate(chunks, 1):
+            boarddat = f"BOARDDAT|{board_name}|{i}/{total}|{chunk}"
+
+            for attempt in range(max_retries):
+                acked, error = await self.mesh.send_dm_wait_ack(boarddat, dest_node, timeout=30.0)
+                if acked:
+                    logger.debug(f"BOARDDAT {board_name} chunk {i}/{total} ACKed (resend)")
+                    break
+                else:
+                    logger.warning(f"BOARDDAT {board_name} chunk {i}/{total} resend failed: {error}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(random.uniform(3.0, 5.0))
+
+            await asyncio.sleep(random.uniform(2.2, 2.6))
+
+    async def _cleanup_stale_pending_board_sync(self):
+        """Clean up outbound board sync entries that have been stuck too long."""
+        now = time.time()
+        timeout = 600  # 10 minutes
+        to_remove = []
+
+        for key, pending in self._pending_board_sync.items():
+            if now - pending.get("timestamp", 0) > timeout:
+                if key not in self._delivered_board_sync:
+                    board_name = key[0]
+                    logger.warning(f"Pending board sync {board_name} to {key[1]} timed out after {timeout}s")
+                to_remove.append(key)
+
+        for key in to_remove:
+            del self._pending_board_sync[key]
 
     def handle_sync_message(self, message: str, sender: str) -> bool:
         """
@@ -1706,14 +1844,27 @@ class SyncManager:
             logger.info(f"BOARDACK received: board={board_name} status={status} from {sender}")
 
             key = (board_name, sender)
+
+            # Check if already delivered
+            if key in self._delivered_board_sync:
+                logger.info(f"BOARDACK {board_name}: Already delivered, ignoring late BOARDACK")
+                return True
+
             if key not in self._pending_board_sync:
                 logger.warning(f"BOARDACK: No pending board sync for {board_name} to {sender}")
                 return False
 
             pending = self._pending_board_sync[key]
+
+            # Guard: if chunks are already being sent, don't start again
+            if pending.get("state") in ("sending", "chunks_sent"):
+                logger.info(f"BOARDACK {board_name}: Chunks already in progress (state={pending['state']}), ignoring duplicate")
+                return True
+
             chunks = pending["chunks"]
             logger.info(f"BOARDACK: Sending {len(chunks)} chunk(s) for {board_name} to {sender}")
 
+            # Set state BEFORE scheduling async task
             pending["state"] = "sending"
             self._schedule_async(self._send_board_chunks(board_name, chunks, sender))
             return True
@@ -1803,9 +1954,26 @@ class SyncManager:
             logger.info(f"BOARDDLV received: board={board_name} status={status} from {sender}")
 
             key = (board_name, sender)
+
+            # Mark as delivered FIRST
+            self._delivered_board_sync.add(key)
+
+            # Update last_board_sync_us NOW (on confirmed delivery, not on send)
             if key in self._pending_board_sync:
+                pending = self._pending_board_sync[key]
+                max_ts = pending.get("max_ts", 0)
+                if max_ts > 0:
+                    self.db.execute(
+                        "UPDATE bbs_peers SET last_board_sync_us = ? WHERE node_id = ?",
+                        (max_ts, sender)
+                    )
+                    logger.info(f"BOARDDLV: Updated last_board_sync_us for {sender} to {max_ts}")
+
                 del self._pending_board_sync[key]
-                logger.info(f"BOARDDLV: Board sync for {board_name} delivered to {sender}")
+                logger.info(f"BOARDDLV: Board sync for {board_name} confirmed delivered to {sender}")
+
+            # Schedule cleanup of delivered set after 5 minutes
+            self._schedule_async(self._cleanup_delivered_board_sync(key))
 
             return True
 
@@ -1814,14 +1982,22 @@ class SyncManager:
             logger.error(traceback.format_exc())
             return False
 
+    async def _cleanup_delivered_board_sync(self, key: tuple, delay: int = 300):
+        """Remove key from delivered set after delay."""
+        await asyncio.sleep(delay)
+        self._delivered_board_sync.discard(key)
+
     async def _send_board_chunks(self, board_name: str, chunks: list[str], dest_node: str):
         """Send board post data chunks to a peer."""
         import random
         total = len(chunks)
         max_retries = 3
+        key = (board_name, dest_node)
 
         # Initial delay to avoid TX queue collision after BOARDACK
         await asyncio.sleep(self._protocol_delay)
+
+        failed_chunks = []
 
         for i, chunk in enumerate(chunks, 1):
             boarddat = f"BOARDDAT|{board_name}|{i}/{total}|{chunk}"
@@ -1835,17 +2011,42 @@ class SyncManager:
                     break
                 else:
                     logger.warning(f"BOARDDAT {board_name} chunk {i}/{total} failed: {error} (attempt {attempt + 1}/{max_retries})")
+                    # Early exit if BOARDDLV arrived while we were waiting
+                    if key in self._delivered_board_sync:
+                        logger.info(f"BOARDDAT {board_name}: BOARDDLV received during chunk send, aborting retries")
+                        if key in self._pending_board_sync:
+                            del self._pending_board_sync[key]
+                        return
                     if attempt < max_retries - 1:
                         await asyncio.sleep(random.uniform(3.0, 5.0))
 
             if not success:
+                failed_chunks.append(i)
                 logger.error(f"BOARDDAT {board_name} chunk {i}/{total} failed after {max_retries} attempts to {dest_node}")
-                return  # Abort — peer will time out and clean up
 
             if i < total:
                 await asyncio.sleep(random.uniform(2.2, 2.6))
 
-        logger.info(f"Sent {total} board chunks for {board_name} to {dest_node}, awaiting BOARDDLV")
+        # Check if already delivered while we were sending
+        if key in self._delivered_board_sync:
+            logger.info(f"BOARDDAT {board_name}: BOARDDLV already received during chunk send")
+            if key in self._pending_board_sync:
+                del self._pending_board_sync[key]
+            return
+
+        if failed_chunks:
+            logger.error(f"BOARDDAT {board_name}: {len(failed_chunks)} chunk(s) failed: {failed_chunks}")
+        else:
+            logger.info(f"Sent {total} board chunks for {board_name} to {dest_node}, awaiting BOARDDLV")
+
+        # Move to awaiting BOARDDLV state
+        if key in self._pending_board_sync:
+            pending = self._pending_board_sync[key]
+            pending["state"] = "chunks_sent"
+            pending["chunks_sent_at"] = time.time()
+            pending["failed_chunks"] = failed_chunks
+            pending["dlv_attempts"] = 1
+            pending["next_dlv_retry"] = time.time() + 60
 
     async def _deliver_board_posts(self, key: tuple, incoming: dict):
         """Reassemble and store board posts received from a peer.
@@ -2003,26 +2204,25 @@ class SyncManager:
                 chunks = self._chunk_message(payload, 150)
                 num_parts = len(chunks)
 
-                # Store pending state
+                # Send BOARDREQ|board_name|count|since_us
+                boardreq = f"BOARDREQ|{board_name}|{len(our_posts)}|{since_us}"
+
+                # Store pending state with retry info
                 key = (board_name, node_id)
                 self._pending_board_sync[key] = {
                     "chunks": chunks,
                     "state": "pending",
                     "timestamp": time.time(),
                     "max_ts": max_ts,
+                    "boardreq": boardreq,
+                    "dest_node": node_id,
+                    "attempts": 1,
+                    "next_retry": time.time() + 30,
                 }
 
-                # Send BOARDREQ|board_name|count|since_us
-                boardreq = f"BOARDREQ|{board_name}|{len(our_posts)}|{since_us}"
                 self._schedule_async(self._send_protocol_dm(boardreq, node_id))
 
                 logger.info(f"Board sync: {board_name} sending {len(our_posts)} post(s) to {node_id}")
-
-                # Update last_board_sync_us for this peer
-                self.db.execute(
-                    "UPDATE bbs_peers SET last_board_sync_us = ? WHERE node_id = ?",
-                    (max_ts, node_id)
-                )
 
         self._board_sync_counters = {}
         self._last_board_sync_time = time.time()

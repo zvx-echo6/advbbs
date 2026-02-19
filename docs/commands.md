@@ -267,6 +267,7 @@ Reply context expires after 5 minutes (mail) or 10 minutes (boards).
 | `!mkboard <name> [desc]` | `!mb` | Create a board |
 | `!rmboard <name>` | `!rb` | Delete a board |
 | `!announce <message>` | `!ann` | Broadcast announcement |
+| `!boardsync [full]` | `!bs` | Force board sync. Use `full` to resync all posts. |
 
 Use `!? admin` to see admin help.
 
