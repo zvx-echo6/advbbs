@@ -215,7 +215,7 @@ Reply context expires after 5 minutes (mail) or 10 minutes (boards).
 | Level | Description |
 |-------|-------------|
 | Always | Anyone can use |
-| Sync boards | Anonymous on `general`/`help` boards |
+| Sync boards | Anonymous on sync-enabled boards (e.g., `general`) |
 | Authenticated | Must be logged in |
 | Admin | Must be admin user |
 
@@ -246,7 +246,7 @@ Reply context expires after 5 minutes (mail) or 10 minutes (boards).
 | `!nodes` (`!n`) | Authenticated |
 | `!destruct` | Authenticated |
 
-*Sync boards (`general`, `help`) allow anonymous read access.
+*Sync-enabled boards (e.g., `general`) allow anonymous read access.
 
 ---
 

@@ -6,10 +6,9 @@ How advBBS nodes synchronize and route mail between each other.
 
 advBBS uses a peer-to-peer sync model where configured BBS nodes exchange:
 - **Remote mail** using `user@BBS` addressing
+- **Board posts** from sync-enabled boards (batched to reduce mesh traffic)
 
 Only explicitly configured peers can participate in sync - this is a security whitelist.
-
-> **Note:** Bulletin sync has been removed. Boards are local-only to each BBS. This simplifies the federation model and reduces mesh traffic.
 
 ## Peer Configuration
 
@@ -44,13 +43,15 @@ enabled = true
 |---------|--------|-------|
 | Remote mail (`user@BBS`) | ✅ Yes | Routed through peers |
 | Local mail (`user`) | ❌ No | Stays on local BBS |
-| Board posts | ❌ No | Local only |
+| Sync-enabled board posts | ✅ Yes | Batched, `general` synced by default |
+| Local-only board posts | ❌ No | `local` board and restricted boards |
 
 ## Sync Triggers
 
 | Trigger | What Happens |
 |---------|--------------|
 | Remote mail | `!send user@BBS` routes immediately through peers |
+| Board posts | Batched: syncs at 10 new local posts OR hourly with pending content |
 
 ## Security: Peer Whitelisting
 
@@ -129,6 +130,44 @@ Sender BBS                              Destination BBS
     │◀─── MAILDLV (msg_id:xxx) ──────────────│  Delivered!
     │                                        │
 ```
+
+### Board Sync Protocol Messages
+
+Board sync uses a dedicated protocol for batched post exchange:
+
+| Message | Purpose |
+|---------|---------|
+| `BOARDREQ` | Request to sync board posts (includes board name, count, since timestamp) |
+| `BOARDACK` | Destination accepts, ready for chunks |
+| `BOARDNAK` | Sync rejected (board not found, sync disabled, etc) |
+| `BOARDDAT` | Post data chunk (max 150 chars each) |
+| `BOARDDLV` | Delivery confirmation |
+
+### Board Sync Flow
+
+```
+Sender BBS                              Destination BBS
+    │                                        │
+    │──── BOARDREQ (board:general, count:3, since:xxx) ─▶│
+    │                                        │
+    │◀─── BOARDACK (board:general) ──────────│  Ready for chunks
+    │                                        │
+    │──── BOARDDAT (general, 1/2) ──────────▶│  Chunk 1
+    │──── BOARDDAT (general, 2/2) ──────────▶│  Chunk 2
+    │                                        │
+    │◀─── BOARDDLV (general) ───────────────│  Delivered!
+    │                                        │
+```
+
+**Payload format:** Multiple posts are packed into a single payload. Records are separated by `\x1F` (RS), fields within each record by `\x1E` (GS): `uuid\x1Eauthor\x1Eorigin_bbs\x1Etimestamp_us\x1Esubject\x1Ebody`
+
+**Batching triggers:**
+- 10 new local posts on any synced board, OR
+- 1+ pending posts and 1 hour elapsed since last sync
+
+**Deduplication:** Each post has a UUID. Duplicate UUIDs are silently skipped on the receiving end.
+
+**Federated identity:** Remote posts are displayed as `author@BBS` (e.g., `alice@REMOTE1`).
 
 ### Multi-Hop Routing
 
@@ -304,4 +343,4 @@ CREATE TABLE sync_log (
 
 ## Protocol
 
-advBBS uses its own native DM-based protocol for all inter-BBS communication. Only advBBS-to-advBBS federation is supported.
+advBBS uses its own native DM-based protocol (`advbbs`) for all inter-BBS communication. Only advBBS-to-advBBS federation is supported.

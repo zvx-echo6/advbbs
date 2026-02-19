@@ -15,26 +15,26 @@ Public message boards for community discussion.
 
 ## Board Types
 
-### Sync Boards (Public)
+### Default Boards
 
-These boards sync between BBS nodes and can be read without logging in:
+| Board | Description | Syncs? |
+|-------|-------------|--------|
+| `general` | General discussion | ✅ Yes |
+| `help` | Help and support | ❌ No |
+| `local` | Local-only discussion | ❌ No |
 
-| Board | Description |
-|-------|-------------|
-| `general` | General discussion |
-| `help` | Help and support |
-
-**Access:**
-- Anyone can `!list` and `!read` posts
+**Sync board access:**
+- Anyone can `!list` and `!read` posts on sync-enabled boards
 - Must be logged in to `!post`
 
-### Local Boards
+**Non-sync board access:**
+- Must be logged in to `!list`, `!read`, and `!post`
 
-Admin-created boards that don't sync between BBS nodes:
+### Custom Boards
 
-- Require login to read and post
-- Created with `!mkboard <name> [description]` (admin only)
-- Deleted with `!rmboard <name>` (admin only)
+Admin-created boards using `!mkboard <name> [description]` (admin only). Custom boards are local-only by default. Admins can enable sync on up to 2 additional boards (max 3 synced total including `general`) via the database `sync_enabled` column.
+
+Delete with `!rmboard <name>` (admin only).
 
 ### Restricted Boards
 
@@ -99,37 +99,24 @@ Must be logged in and inside a board:
 
 ## Board Sync
 
-Only `general` and `help` boards sync between BBS nodes.
-
-```python
-# Defined in advbbs/core/boards.py
-SYNC_BOARDS = ["general", "help"]
-```
+Boards with `sync_enabled = 1` in the database are synced between peer BBS nodes. By default, only `general` is synced. Admins can enable sync on up to 2 additional boards (3 synced total).
 
 ### What Syncs
 
 | Content | Syncs? |
 |---------|--------|
-| Posts on `general` | ✅ Yes |
-| Posts on `help` | ✅ Yes |
-| Admin-created boards | ❌ No |
+| Posts on sync-enabled boards | ✅ Yes |
+| Posts on local-only boards | ❌ No |
 | Restricted boards | ❌ No |
 
 ### How Sync Works
 
-1. BBS nodes periodically exchange bulletins via advBBS protocol
-2. Each post has a UUID for deduplication
-3. Content is decrypted, transmitted, and re-encrypted at destination
-4. Posts from unknown boards are mapped to `general`
-
-### Sync Interval
-
-Default: Every 60 minutes (configurable in `config.toml`)
-
-```toml
-[sync]
-bulletin_sync_interval_minutes = 60
-```
+1. New local posts increment a per-board counter
+2. Sync triggers when 10 posts accumulate OR 1 hour elapses with pending content
+3. Posts are batched into a single payload per board per peer
+4. Each post has a UUID for deduplication
+5. Content is decrypted, transmitted, and re-encrypted at destination
+6. Remote posts display as `author@BBS` (e.g., `alice@REMOTE1`)
 
 ## Admin Commands
 
@@ -143,4 +130,4 @@ Example:
 !mkboard local-events Community events and meetups
 ```
 
-Note: Admin-created boards are local-only and don't sync.
+Note: Admin-created boards are local-only by default. Use the database `sync_enabled` column to enable sync (max 3 synced boards total).

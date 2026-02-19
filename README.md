@@ -11,6 +11,7 @@
 - **Node-based 2FA**: Login requires both password and a registered node
 - **Inter-BBS federation**: Send mail to users on other BBS nodes (`SEND user@remotebbs message`)
 - **Multi-hop routing**: Messages can relay through intermediate BBS nodes to reach destination
+- **Board sync**: Sync-enabled boards automatically exchange posts between peers (batched)
 - **Lightweight**: Designed to run on Raspberry Pi Zero 2 W (~100MB RAM)
 - **Operating modes**: Full, mail-only, boards-only, or repeater mode
 - **Docker ready**: Includes Dockerfile and docker-compose for easy deployment
@@ -170,6 +171,11 @@ advBBS supports sending mail between BBS nodes using `user@bbs` addressing:
 | `MAILNAK` | Delivery rejected (user not found, loop, etc) |
 | `MAILDAT` | Message chunk |
 | `MAILDLV` | Delivery confirmation |
+| `BOARDREQ` | Request to sync board posts |
+| `BOARDACK` | Board sync accepted |
+| `BOARDNAK` | Board sync rejected |
+| `BOARDDAT` | Board post data chunk |
+| `BOARDDLV` | Board sync delivery confirmation |
 
 ## Configuration
 

@@ -78,9 +78,10 @@ Users interact with advBBS by sending text messages to your Meshtastic node:
 | `!login <user> <pass>` | Log in |
 | `!mail` | Check your mailbox |
 | `!send <user@BBS> <msg>` | Send mail |
-| `!boards` | List message boards |
-| `!read <board>` | Read board messages |
-| `!post <board> <msg>` | Post to board |
+| `!board` | List message boards |
+| `!board <name>` | Enter a board |
+| `!list` | List posts in current board |
+| `!post <subj> <body>` | Post to current board |
 
 ## Federation (Multi-BBS)
 
