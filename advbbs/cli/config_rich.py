@@ -1159,9 +1159,11 @@ class ConfigTool:
             table.add_row("1. List Users", f"{user_count} total, {admin_count} admin, {banned_count} banned")
             table.add_row("2. Ban/Unban User", "[dim]Toggle user ban status[/dim]")
             table.add_row("3. Set/Remove Admin", "[dim]Toggle admin privileges[/dim]")
-            table.add_row("4. Delete User", "[dim]Permanently delete user[/dim]")
-            table.add_row("5. List Nodes", f"{node_count} known nodes")
-            table.add_row("6. View Node Details", "[dim]Show node information[/dim]")
+            table.add_row("4. Reset User Password", "[dim]Set new password for user[/dim]")
+            table.add_row("5. Manage User Nodes", "[dim]Add/remove/reset nodes[/dim]")
+            table.add_row("6. Delete User", "[dim]Permanently delete user[/dim]")
+            table.add_row("7. List Nodes", f"{node_count} known nodes")
+            table.add_row("8. View Node Details", "[dim]Show node information[/dim]")
 
             console.print(table)
             console.print()
@@ -1184,10 +1186,14 @@ class ConfigTool:
             elif choice == 3:
                 self._set_admin(conn)
             elif choice == 4:
-                self._delete_user(conn)
+                self._reset_user_password(conn)
             elif choice == 5:
-                self._list_nodes(conn)
+                self._manage_user_nodes(conn)
             elif choice == 6:
+                self._delete_user(conn)
+            elif choice == 7:
+                self._list_nodes(conn)
+            elif choice == 8:
                 self._view_node(conn)
 
     def _list_users(self, conn: sqlite3.Connection):
@@ -1322,6 +1328,174 @@ class ConfigTool:
             console.print(f"[red]Error: {e}[/red]")
 
         Prompt.ask("Press Enter to continue")
+
+    def _reset_user_password(self, conn: sqlite3.Connection):
+        """Reset a user's password via TUI."""
+        console.print()
+
+        username = Prompt.ask("Username to reset password for")
+        if not username:
+            return
+
+        try:
+            user = conn.execute(
+                "SELECT id, username FROM users WHERE username = ? COLLATE NOCASE",
+                (username,)
+            ).fetchone()
+
+            if not user:
+                console.print(f"[red]User '{username}' not found[/red]")
+                Prompt.ask("Press Enter to continue")
+                return
+
+            password = Prompt.ask("New password (min 6 chars)", password=True)
+            if not password or len(password) < 6:
+                console.print("[red]Password must be at least 6 characters[/red]")
+                Prompt.ask("Press Enter to continue")
+                return
+
+            confirm = Prompt.ask("Confirm password", password=True)
+            if password != confirm:
+                console.print("[red]Passwords do not match[/red]")
+                Prompt.ask("Press Enter to continue")
+                return
+
+            # Hash password using bcrypt (same as BBS runtime)
+            try:
+                import bcrypt
+                password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+            except ImportError:
+                console.print("[red]bcrypt not available — run this from the BBS venv[/red]")
+                Prompt.ask("Press Enter to continue")
+                return
+
+            # Only update password_hash — keep salt and encryption_key intact
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, user["id"])
+            )
+            conn.commit()
+            console.print(f"[green]Password reset for '{user['username']}'[/green]")
+
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+
+        Prompt.ask("Press Enter to continue")
+
+    def _manage_user_nodes(self, conn: sqlite3.Connection):
+        """Manage nodes for a specific user."""
+        console.print()
+
+        username = Prompt.ask("Username to manage nodes for")
+        if not username:
+            return
+
+        try:
+            user = conn.execute(
+                "SELECT id, username FROM users WHERE username = ? COLLATE NOCASE",
+                (username,)
+            ).fetchone()
+
+            if not user:
+                console.print(f"[red]User '{username}' not found[/red]")
+                Prompt.ask("Press Enter to continue")
+                return
+
+            while True:
+                self._clear()
+                console.print(f"[cyan]Node Management: {user['username']}[/cyan]")
+                console.print()
+
+                # List current nodes
+                nodes = conn.execute("""
+                    SELECT n.node_id, un.is_primary, un.registered_at_us
+                    FROM user_nodes un
+                    JOIN nodes n ON un.node_id = n.id
+                    WHERE un.user_id = ?
+                    ORDER BY un.is_primary DESC, un.registered_at_us
+                """, (user["id"],)).fetchall()
+
+                if nodes:
+                    for i, node in enumerate(nodes, 1):
+                        primary = " [yellow](primary)[/yellow]" if node["is_primary"] else ""
+                        console.print(f"  [cyan]{i}.[/cyan] {node['node_id']}{primary}")
+                    console.print()
+                else:
+                    console.print("[dim]No nodes associated[/dim]")
+                    console.print()
+
+                console.print("[cyan]A.[/cyan] Add node")
+                console.print("[cyan]D.[/cyan] Remove node")
+                console.print("[cyan]R.[/cyan] Remove ALL nodes")
+                console.print("[cyan]0.[/cyan] Back")
+                console.print()
+
+                try:
+                    choice = Prompt.ask("Select option", default="0")
+                except KeyboardInterrupt:
+                    return
+
+                if choice == "0":
+                    return
+                elif choice.upper() == "A":
+                    node_id = Prompt.ask("Node ID to add (e.g., !a1b2c3d4)")
+                    if node_id:
+                        import time as _time
+                        now_us = int(_time.time() * 1_000_000)
+                        # Get or create node
+                        node_row = conn.execute(
+                            "SELECT id FROM nodes WHERE node_id = ?", (node_id,)
+                        ).fetchone()
+                        if not node_row:
+                            conn.execute(
+                                "INSERT INTO nodes (node_id, first_seen_us, last_seen_us) VALUES (?, ?, ?)",
+                                (node_id, now_us, now_us)
+                            )
+                            conn.commit()
+                            node_row = conn.execute(
+                                "SELECT id FROM nodes WHERE node_id = ?", (node_id,)
+                            ).fetchone()
+                        conn.execute(
+                            "INSERT OR REPLACE INTO user_nodes (user_id, node_id, registered_at_us, is_primary) VALUES (?, ?, ?, 0)",
+                            (user["id"], node_row["id"], now_us)
+                        )
+                        conn.commit()
+                        console.print(f"[green]Node {node_id} added[/green]")
+                        Prompt.ask("Press Enter to continue")
+                elif choice.upper() == "D":
+                    if not nodes:
+                        console.print("[yellow]No nodes to remove[/yellow]")
+                        Prompt.ask("Press Enter to continue")
+                        continue
+                    try:
+                        idx = IntPrompt.ask("Enter node number to remove") - 1
+                        if 0 <= idx < len(nodes):
+                            node_db = conn.execute(
+                                "SELECT id FROM nodes WHERE node_id = ?",
+                                (nodes[idx]["node_id"],)
+                            ).fetchone()
+                            if node_db:
+                                conn.execute(
+                                    "DELETE FROM user_nodes WHERE user_id = ? AND node_id = ?",
+                                    (user["id"], node_db["id"])
+                                )
+                                conn.commit()
+                                console.print(f"[green]Node removed[/green]")
+                        else:
+                            console.print("[red]Invalid number[/red]")
+                    except (ValueError, KeyboardInterrupt):
+                        pass
+                    Prompt.ask("Press Enter to continue")
+                elif choice.upper() == "R":
+                    if Confirm.ask(f"Remove ALL nodes from {user['username']}?", default=False):
+                        conn.execute("DELETE FROM user_nodes WHERE user_id = ?", (user["id"],))
+                        conn.commit()
+                        console.print(f"[green]All nodes removed from {user['username']}[/green]")
+                    Prompt.ask("Press Enter to continue")
+
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            Prompt.ask("Press Enter to continue")
 
     def _delete_user(self, conn: sqlite3.Connection):
         """Delete a user and their data."""

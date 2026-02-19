@@ -124,6 +124,7 @@ class FeaturesConfig:
     sync_enabled: bool = True
     registration_mode: str = "open"  # open | closed | limited
     registration_whitelist: list[str] = field(default_factory=list)  # Node IDs allowed when mode=limited
+    max_users: int = 0  # Maximum registered users (0 = unlimited)
 
 
 @dataclass

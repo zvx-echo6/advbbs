@@ -193,6 +193,14 @@ Changing the admin password in `config.toml` will generate a different master ke
 
 **DO NOT change the admin password after users have registered.**
 
+As of v0.4.0, advBBS stores a fingerprint of the admin password in the database and **refuses to start** if it detects a change while users exist:
+
+```
+CRITICAL: admin_password has changed but 3 users exist!
+Changing admin_password after users have registered will break ALL encrypted mail.
+Restore the original password in config.toml.
+```
+
 If you must change it:
 1. Export all user data (if possible)
 2. Delete the database

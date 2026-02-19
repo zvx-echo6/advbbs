@@ -127,8 +127,13 @@ Short aliases are shown in parentheses for quick typing on mobile.
 ### Admin
 | Command | Description |
 |---------|-------------|
-| `!ban <user> [reason]` | Ban user |
+| `!ban <user> [reason]` | Ban user (kills active sessions) |
 | `!unban <user>` | Unban user |
+| `!kick <user>` | Force logout from all sessions |
+| `!resetpw <user> <pass>` | Reset user's password |
+| `!setnode <user> add <node>` | Add node to user |
+| `!setnode <user> rm <node>` | Remove node from user |
+| `!setnode <user> reset` | Remove all nodes from user |
 | `!mkboard <name> [desc]` (`!mb`) | Create board |
 | `!rmboard <name>` (`!rb`) | Delete board |
 | `!announce <msg>` (`!ann`) | Broadcast message |
@@ -182,11 +187,12 @@ advBBS supports sending mail between BBS nodes using `user@bbs` addressing:
 See `config.example.toml` for all options.
 
 Key settings:
-- `bbs.admin_password` - **CHANGE THIS!**
+- `bbs.admin_password` - **CHANGE THIS!** Do not change after users have registered.
 - `bbs.timezone` - Timezone for timestamps (e.g., America/Boise, UTC)
 - `meshtastic.connection_type` - serial, tcp, or ble
 - `meshtastic.serial_port` - e.g., /dev/ttyUSB0
 - `operating_mode.mode` - full, mail_only, boards_only, repeater
+- `features.max_users` - Maximum registered users (0 = unlimited)
 
 ### Peer Configuration (Federation)
 

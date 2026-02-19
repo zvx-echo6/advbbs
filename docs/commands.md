@@ -37,6 +37,9 @@ Short aliases are shown in parentheses for quick typing on mobile.
 | `!addnode` | `!an` | Add a node |
 | `!rmnode` | `!rn` | Remove a node |
 | `!peers` | | List BBS peers |
+| `!kick` | | Force logout user (admin) |
+| `!resetpw` | | Reset password (admin) |
+| `!setnode` | | Manage user nodes (admin) |
 
 ---
 
@@ -254,8 +257,13 @@ Reply context expires after 5 minutes (mail) or 10 minutes (boards).
 
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `!ban <user> [reason]` | | Ban a user |
+| `!ban <user> [reason]` | | Ban a user (kills active sessions) |
 | `!unban <user>` | | Unban a user |
+| `!kick <user>` | | Force logout from all sessions |
+| `!resetpw <user> <pass>` | | Reset a user's password |
+| `!setnode <user> add <node>` | | Add node to a user's account |
+| `!setnode <user> rm <node>` | | Remove node from a user's account |
+| `!setnode <user> reset` | | Remove all nodes from a user |
 | `!mkboard <name> [desc]` | `!mb` | Create a board |
 | `!rmboard <name>` | `!rb` | Delete a board |
 | `!announce <message>` | `!ann` | Broadcast announcement |

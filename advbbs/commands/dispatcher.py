@@ -105,6 +105,9 @@ class CommandDispatcher:
         self.register("RB", self.cmd_rmboard, "admin", "Delete board (short)")
         self.register("ANNOUNCE", self.cmd_announce, "admin", "Broadcast: ANNOUNCE <msg>")
         self.register("ANN", self.cmd_announce, "admin", "Announce (short)")
+        self.register("RESETPW", self.cmd_resetpw, "admin", "Reset password: RESETPW <user> <newpass>")
+        self.register("KICK", self.cmd_kick, "admin", "Force logout: KICK <user>")
+        self.register("SETNODE", self.cmd_setnode, "admin", "Manage nodes: SETNODE <user> <add|rm|reset> [node]")
 
         # Self-destruct
         self.register("DESTRUCT", self.cmd_destruct, "authenticated", "Delete all your data")
@@ -372,6 +375,9 @@ class CommandDispatcher:
                 f"[{callsign}] Admin Commands\n"
                 "!ban user [reason] - Ban user\n"
                 "!unban user - Unban user\n"
+                "!kick user - Force logout\n"
+                "!resetpw user pass - Reset password\n"
+                "!setnode user add|rm|reset [node]\n"
                 "!mkboard name [desc] - Create board\n"
                 "!rmboard name - Delete board\n"
                 "!announce msg - Broadcast"
@@ -443,6 +449,11 @@ class CommandDispatcher:
             whitelist = self.bbs.config.features.registration_whitelist
             if sender not in whitelist:
                 return "Registration is by invitation only."
+
+        # Check max user cap
+        max_users = self.bbs.config.features.max_users
+        if max_users > 0 and self.bbs.db.count_users() >= max_users:
+            return f"Registration full ({max_users} users max)."
 
         parts = args.split(maxsplit=1)
         if len(parts) < 2:
@@ -598,16 +609,16 @@ class CommandDispatcher:
         if not self.bbs.crypto.verify_password(old_pass, user.password_hash.decode()):
             return "Current password is incorrect."
 
-        # Generate new credentials
-        salt = self.bbs.crypto.generate_salt()
+        # Only update password hash — keep existing salt and encryption_key
+        # The encryption key is protected by the master key, NOT the user password.
+        # Regenerating salt+key would destroy all existing encrypted mail.
         password_hash = self.bbs.crypto.hash_password(new_pass).encode()
-        encryption_key = self.bbs.crypto.derive_key(new_pass, salt)
 
         user_repo.update_password(
             user.id,
             password_hash,
-            salt,
-            self.bbs.master_key.encrypt_user_key(encryption_key)
+            user.salt,
+            user.encryption_key
         )
 
         return "Password changed successfully."
@@ -1303,6 +1314,15 @@ class CommandDispatcher:
         user_repo = UserRepository(self.bbs.db)
 
         if user_repo.ban_user(username, reason, session["username"]):
+            # Kill all active sessions for the banned user
+            user = user_repo.get_user_by_username(username)
+            if user:
+                for node_id, sess in self.bbs._sessions.items():
+                    if sess.get("user_id") == user.id:
+                        sess["user_id"] = None
+                        sess["username"] = None
+                        sess["is_admin"] = False
+                        sess["current_board"] = None
             return f"User {username} has been banned."
         return "User not found."
 
@@ -1364,6 +1384,108 @@ class CommandDispatcher:
             return "Usage: !announce <message>"
         # TODO: Implement
         return "Announcement system not yet implemented."
+
+    def cmd_resetpw(self, sender: str, args: str, session: dict, channel: int) -> str:
+        """Reset a user's password (admin only)."""
+        parts = args.split(maxsplit=1)
+        if len(parts) < 2:
+            return "Usage: !resetpw <username> <newpass>"
+
+        username, new_pass = parts
+
+        if len(new_pass) < 6:
+            return "New password must be at least 6 characters."
+
+        from ..db.users import UserRepository
+        user_repo = UserRepository(self.bbs.db)
+
+        user = user_repo.get_user_by_username(username)
+        if not user:
+            return f"User '{username}' not found."
+
+        # Only update password hash — keep existing salt and encryption_key
+        password_hash = self.bbs.crypto.hash_password(new_pass).encode()
+
+        user_repo.update_password(
+            user.id,
+            password_hash,
+            user.salt,
+            user.encryption_key
+        )
+
+        return f"Password reset for {username}."
+
+    def cmd_kick(self, sender: str, args: str, session: dict, channel: int) -> str:
+        """Force logout a user from all sessions (admin only)."""
+        if not args:
+            return "Usage: !kick <username>"
+
+        username = args.strip()
+
+        from ..db.users import UserRepository
+        user_repo = UserRepository(self.bbs.db)
+
+        user = user_repo.get_user_by_username(username)
+        if not user:
+            return f"User '{username}' not found."
+
+        # Clear all sessions for this user
+        kicked = 0
+        for node_id, sess in self.bbs._sessions.items():
+            if sess.get("user_id") == user.id:
+                sess["user_id"] = None
+                sess["username"] = None
+                sess["is_admin"] = False
+                sess["current_board"] = None
+                kicked += 1
+
+        if kicked:
+            return f"Kicked {username} from {kicked} session(s)."
+        return f"User {username} has no active sessions."
+
+    def cmd_setnode(self, sender: str, args: str, session: dict, channel: int) -> str:
+        """Admin node management: SETNODE <user> <add|rm|reset> [node_id]"""
+        parts = args.split()
+        if len(parts) < 2:
+            return "Usage: !setnode <user> <add|rm|reset> [node_id]"
+
+        username = parts[0]
+        action = parts[1].lower()
+        node_id = parts[2] if len(parts) > 2 else None
+
+        from ..db.users import UserRepository, NodeRepository, UserNodeRepository
+        user_repo = UserRepository(self.bbs.db)
+        node_repo = NodeRepository(self.bbs.db)
+        user_node_repo = UserNodeRepository(self.bbs.db)
+
+        user = user_repo.get_user_by_username(username)
+        if not user:
+            return f"User '{username}' not found."
+
+        if action == "add":
+            if not node_id:
+                return "Usage: !setnode <user> add <node_id>"
+            if not node_id.startswith("!"):
+                return "Invalid node ID (must start with !)"
+            node = node_repo.get_or_create_node(node_id)
+            user_node_repo.associate_node(user.id, node.id)
+            return f"Node {node_id} added to {username}."
+
+        elif action == "rm":
+            if not node_id:
+                return "Usage: !setnode <user> rm <node_id>"
+            if user_node_repo.remove_node(user.id, node_id):
+                return f"Node {node_id} removed from {username}."
+            return f"Node {node_id} not found on {username}."
+
+        elif action == "reset":
+            # Remove all nodes from user
+            nodes = user_node_repo.get_user_nodes(user.id)
+            for n in nodes:
+                user_node_repo.remove_node(user.id, n)
+            return f"All {len(nodes)} node(s) removed from {username}."
+
+        return "Unknown action. Use: add, rm, reset"
 
     def cmd_destruct(self, sender: str, args: str, session: dict, channel: int) -> str:
         """Delete all user data."""

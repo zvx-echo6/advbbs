@@ -122,11 +122,48 @@ class advBBS:
         if not salt_b64:
             # Save the newly generated salt
             import time
+            import hashlib
+            now_us = int(time.time() * 1_000_000)
             self.db.execute(
                 "INSERT OR REPLACE INTO bbs_settings (key, value, updated_at_us) VALUES (?, ?, ?)",
-                ("master_key_salt", base64.b64encode(returned_salt).decode(), int(time.time() * 1_000_000))
+                ("master_key_salt", base64.b64encode(returned_salt).decode(), now_us)
+            )
+            # Store admin password fingerprint for change detection
+            pw_hash = hashlib.sha256(self.config.bbs.admin_password.encode()).hexdigest()[:16]
+            self.db.execute(
+                "INSERT OR REPLACE INTO bbs_settings (key, value, updated_at_us) VALUES (?, ?, ?)",
+                ("admin_pw_fingerprint", pw_hash, now_us)
             )
             logger.info("Saved new master key salt to database")
+        else:
+            # Validate admin password hasn't changed since last startup
+            import hashlib
+            pw_hash = hashlib.sha256(self.config.bbs.admin_password.encode()).hexdigest()[:16]
+            stored_fp = self.db.fetchone(
+                "SELECT value FROM bbs_settings WHERE key = ?",
+                ("admin_pw_fingerprint",)
+            )
+            if stored_fp and stored_fp[0] != pw_hash:
+                user_count = self.db.fetchone("SELECT COUNT(*) FROM users")
+                if user_count and user_count[0] > 0:
+                    logger.error(
+                        f"CRITICAL: admin_password has changed but {user_count[0]} users exist! "
+                        "Changing admin_password after users have registered will break ALL "
+                        "encrypted mail. Restore the original password or delete all users."
+                    )
+                    raise RuntimeError(
+                        f"admin_password changed with {user_count[0]} existing users. "
+                        "This would destroy all encrypted mail. "
+                        "Restore the original password in config.toml."
+                    )
+                else:
+                    # No users — safe to update fingerprint
+                    import time
+                    self.db.execute(
+                        "INSERT OR REPLACE INTO bbs_settings (key, value, updated_at_us) VALUES (?, ?, ?)",
+                        ("admin_pw_fingerprint", pw_hash, int(time.time() * 1_000_000))
+                    )
+                    logger.info("Admin password changed (no users affected)")
 
         # Initialize Meshtastic interface
         from ..mesh.interface import MeshInterface
