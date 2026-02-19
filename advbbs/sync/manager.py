@@ -79,6 +79,9 @@ class SyncManager:
         self._maildat_max_attempts = config.maildlv_max_attempts
         self._maildat_timeout = config.maildlv_timeout_seconds
 
+        # Track delivered mail UUIDs to prevent retry loops from overwriting success
+        self._delivered_mail = set()  # UUIDs that received MAILDLV confirmation
+
         # MAILDLV awaiting state - track sent mail waiting for delivery confirmation
         self._awaiting_maildlv = {}  # uuid -> {dest_node, chunks, timestamp, attempts, next_retry}
         self._maildlv_retry_intervals = [60, 120, 180]  # seconds between retries (longer than MAILREQ)
@@ -305,8 +308,13 @@ class SyncManager:
         to_remove = []
 
         for mail_uuid, pending in self._pending_remote_mail.items():
-            # Skip entries that have already sent chunks (waiting for MAILDLV)
-            if pending.get("state") == "chunks_sent":
+            # Skip entries that are sending or have sent chunks
+            if pending.get("state") in ("chunks_sending", "chunks_sent"):
+                continue
+
+            # Skip if already delivered
+            if mail_uuid in self._delivered_mail:
+                to_remove.append(mail_uuid)
                 continue
 
             # Skip if not ready for retry
@@ -351,6 +359,11 @@ class SyncManager:
         to_remove = []
 
         for mail_uuid, awaiting in list(self._awaiting_maildlv.items()):
+            # Skip if already delivered (MAILDLV received while we were waiting)
+            if mail_uuid in self._delivered_mail:
+                to_remove.append(mail_uuid)
+                continue
+
             # Skip if not ready for retry
             next_retry = awaiting.get("next_retry", 0)
             if now < next_retry:
@@ -433,6 +446,11 @@ class SyncManager:
             logger.info(f"Resent {len(indices_to_send)} chunk(s) for {uuid[:8]}, all ACKed")
 
         return new_failed
+
+    async def _cleanup_delivered_mail(self, uuid: str, delay: int = 300):
+        """Remove UUID from delivered set after delay (prevents memory leak)."""
+        await asyncio.sleep(delay)
+        self._delivered_mail.discard(uuid)
 
     async def _cleanup_stale_incoming(self):
         """Clean up incomplete incoming mail that timed out."""
@@ -959,15 +977,29 @@ class SyncManager:
                 )
                 return True
 
+            # Check if already delivered — ignore late ACKs
+            if uuid in self._delivered_mail:
+                logger.info(f"MAILACK {uuid[:8]}: Already delivered, ignoring late MAILACK")
+                return True
+
             # Check if we have pending mail for this UUID
             if uuid not in self._pending_remote_mail:
                 logger.warning(f"MAILACK {uuid[:8]}: No pending mail found (already sent or expired)")
                 return False
 
             pending = self._pending_remote_mail[uuid]
+
+            # Guard: if chunks are already being sent or were sent, don't start again
+            if pending.get("state") in ("chunks_sending", "chunks_sent"):
+                logger.info(f"MAILACK {uuid[:8]}: Chunks already in progress (state={pending['state']}), ignoring duplicate MAILACK")
+                return True
+
             chunks = pending["chunks"]
             dest_node = pending["dest_node"]
             attempts = pending.get("attempts", 1)
+
+            # IMMEDIATELY mark state so retry loop won't fire another MAILREQ
+            pending["state"] = "chunks_sending"
 
             logger.info(f"MAILACK {uuid[:8]}: Sending {len(chunks)} chunk(s) to {dest_node} (after {attempts} attempt(s))")
 
@@ -1021,6 +1053,13 @@ class SyncManager:
             logger.error(f"MAILDAT {uuid[:8]}: {len(failed_chunks)} chunk(s) failed to send: {failed_chunks}")
         else:
             logger.info(f"Sent {total} chunks for {uuid[:8]}, all ACKed, awaiting MAILDLV")
+
+        # Check if MAILDLV already arrived while we were sending chunks
+        if uuid in self._delivered_mail:
+            logger.info(f"MAILDAT {uuid[:8]}: MAILDLV already received during chunk send, skipping retry setup")
+            if uuid in self._pending_remote_mail:
+                del self._pending_remote_mail[uuid]
+            return
 
         # Move from pending_remote_mail to awaiting_maildlv
         now = time.time()
@@ -1079,6 +1118,11 @@ class SyncManager:
 
     def _store_mail_failure(self, uuid: str, recipient: str, reason: str):
         """Store mail failure in database for user notification."""
+        # Don't overwrite a successful delivery
+        if uuid in self._delivered_mail:
+            logger.info(f"Skipping failure status for {uuid[:8]} — already delivered")
+            return
+
         try:
             from ..db.messages import MessageRepository
             msg_repo = MessageRepository(self.db)
@@ -1230,10 +1274,19 @@ class SyncManager:
 
             logger.info(f"MAILDLV {uuid[:8]}: Remote mail successfully delivered to {dest}")
 
-            # Clean up awaiting state - delivery confirmed, no more retries needed
+            # Add to delivered set FIRST — prevents any in-flight coroutines from overwriting
+            self._delivered_mail.add(uuid)
+            # Clean up after 5 minutes (enough for all retries to settle)
+            self._schedule_async(self._cleanup_delivered_mail(uuid))
+
+            # Clean up ALL tracking state for this UUID
             if uuid in self._awaiting_maildlv:
                 del self._awaiting_maildlv[uuid]
                 logger.debug(f"MAILDLV {uuid[:8]}: Cleared awaiting state")
+
+            if uuid in self._pending_remote_mail:
+                del self._pending_remote_mail[uuid]
+                logger.debug(f"MAILDLV {uuid[:8]}: Cleared pending state")
 
             # Update message status in database
             try:
