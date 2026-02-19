@@ -1038,6 +1038,12 @@ class SyncManager:
                     break
                 else:
                     logger.warning(f"MAILDAT {uuid[:8]} chunk {i}/{total} failed: {error} (attempt {attempt + 1}/{max_chunk_retries})")
+                    # Early exit if MAILDLV arrived while we were waiting for ACK
+                    if uuid in self._delivered_mail:
+                        logger.info(f"MAILDAT {uuid[:8]}: MAILDLV received during chunk send, aborting retries")
+                        if uuid in self._pending_remote_mail:
+                            del self._pending_remote_mail[uuid]
+                        return
                     if attempt < max_chunk_retries - 1:
                         await asyncio.sleep(random.uniform(3.0, 5.0))
 
