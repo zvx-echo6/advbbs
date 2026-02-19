@@ -74,6 +74,3 @@ RAP detects it within a few missed heartbeat cycles and marks the peer as unreac
 
 **Can I run multiple BBS nodes on the same mesh?**
 Yes — that's the entire point of federation. Each BBS has its own callsign, user base, and storage. They peer with each other to exchange mail and board posts.
-
-**What about restricted/private boards?**
-Restricted boards use per-board encryption keys. Only users explicitly granted access can read them. They never sync between BBS nodes because the encryption keys aren't shared across the federation.

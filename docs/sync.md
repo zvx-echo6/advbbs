@@ -44,7 +44,7 @@ enabled = true
 | Remote mail (`user@BBS`) | ✅ Yes | Routed through peers |
 | Local mail (`user`) | ❌ No | Stays on local BBS |
 | Sync-enabled board posts | ✅ Yes | Batched, `general` synced by default |
-| Local-only board posts | ❌ No | `local` board and restricted boards |
+| Local-only board posts | ❌ No | `local` board and other non-synced boards |
 
 ## Sync Triggers
 

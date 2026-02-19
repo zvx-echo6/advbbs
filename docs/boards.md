@@ -36,14 +36,6 @@ Admin-created boards using `!mkboard <name> [description]` (admin only). Custom 
 
 Delete with `!rmboard <name>` (admin only).
 
-### Restricted Boards
-
-Private boards with per-board encryption:
-
-- Require explicit access grants
-- Never synced (recipients on other BBS nodes don't have keys)
-- Content encrypted with board-specific key
-
 ## Listing Posts
 
 Posts are numbered sequentially, starting with **#1 for the oldest post**.
@@ -107,7 +99,6 @@ Boards with `sync_enabled = 1` in the database are synced between peer BBS nodes
 |---------|--------|
 | Posts on sync-enabled boards | ✅ Yes |
 | Posts on local-only boards | ❌ No |
-| Restricted boards | ❌ No |
 
 ### How Sync Works
 

@@ -33,6 +33,15 @@ Federated bulletin board synchronization between peer BBS nodes.
 
 ## Ideas Under Consideration
 
+### Restricted Boards
+Private boards with per-board encryption. The backend implementation exists (board_access table, per-user encrypted board keys, access checks in BoardService) but no user-facing commands are wired up yet.
+
+Needed:
+- `!mkboard -r <name> [desc]` — create a restricted board
+- `!grant <board> <user>` — grant a user access (encrypts board key with their user key)
+- `!revoke <board> <user>` — revoke access
+- Restricted boards never sync (encryption keys are per-BBS)
+
 ### Web Reader Interface
 Basic read-only web interface for viewing boards and mail (partially implemented, disabled by default).
 
