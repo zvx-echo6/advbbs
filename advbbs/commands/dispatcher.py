@@ -507,7 +507,7 @@ class CommandDispatcher:
             user_node_repo = UserNodeRepository(self.bbs.db)
 
             node = node_repo.get_or_create_node(sender)
-            user_node_repo.associate_node(user.id, node.id, is_primary=True)
+            user_node_repo.associate_node(user.id, node.id)
 
             self.bbs.stats.users_registered += 1
 

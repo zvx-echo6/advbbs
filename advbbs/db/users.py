@@ -272,28 +272,19 @@ class UserNodeRepository:
     def __init__(self, db: Database):
         self.db = db
 
-    def associate_node(self, user_id: int, node_db_id: int, is_primary: bool = False) -> UserNode:
+    def associate_node(self, user_id: int, node_db_id: int) -> UserNode:
         """Associate a node with a user."""
         now_us = int(time.time() * 1_000_000)
 
-        # If setting as primary, unset any existing primary
-        if is_primary:
-            self.db.execute(
-                "UPDATE user_nodes SET is_primary = 0 WHERE user_id = ?",
-                (user_id,)
-            )
-
-        cursor = self.db.execute("""
-            INSERT OR REPLACE INTO user_nodes (user_id, node_id, registered_at_us, is_primary)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, node_db_id, now_us, 1 if is_primary else 0))
+        self.db.execute("""
+            INSERT OR REPLACE INTO user_nodes (user_id, node_id, registered_at_us)
+            VALUES (?, ?, ?)
+        """, (user_id, node_db_id, now_us))
 
         return UserNode(
-            id=cursor.lastrowid,
             user_id=user_id,
             node_id=node_db_id,
             registered_at_us=now_us,
-            is_primary=is_primary
         )
 
     def remove_node(self, user_id: int, node_id: str) -> bool:
@@ -312,18 +303,9 @@ class UserNodeRepository:
             SELECT n.node_id FROM nodes n
             JOIN user_nodes un ON n.id = un.node_id
             WHERE un.user_id = ?
-            ORDER BY un.is_primary DESC, un.registered_at_us
+            ORDER BY un.registered_at_us
         """, (user_id,))
         return [row["node_id"] for row in rows]
-
-    def get_primary_node(self, user_id: int) -> Optional[str]:
-        """Get user's primary node ID."""
-        row = self.db.fetchone("""
-            SELECT n.node_id FROM nodes n
-            JOIN user_nodes un ON n.id = un.node_id
-            WHERE un.user_id = ? AND un.is_primary = 1
-        """, (user_id,))
-        return row["node_id"] if row else None
 
     def is_node_associated(self, user_id: int, node_db_id: int) -> bool:
         """Check if a node is associated with a user."""

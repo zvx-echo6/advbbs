@@ -1408,17 +1408,16 @@ class ConfigTool:
 
                 # List current nodes
                 nodes = conn.execute("""
-                    SELECT n.node_id, un.is_primary, un.registered_at_us
+                    SELECT n.node_id, un.registered_at_us
                     FROM user_nodes un
                     JOIN nodes n ON un.node_id = n.id
                     WHERE un.user_id = ?
-                    ORDER BY un.is_primary DESC, un.registered_at_us
+                    ORDER BY un.registered_at_us
                 """, (user["id"],)).fetchall()
 
                 if nodes:
                     for i, node in enumerate(nodes, 1):
-                        primary = " [yellow](primary)[/yellow]" if node["is_primary"] else ""
-                        console.print(f"  [cyan]{i}.[/cyan] {node['node_id']}{primary}")
+                        console.print(f"  [cyan]{i}.[/cyan] {node['node_id']}")
                     console.print()
                 else:
                     console.print("[dim]No nodes associated[/dim]")
@@ -1456,7 +1455,7 @@ class ConfigTool:
                                 "SELECT id FROM nodes WHERE node_id = ?", (node_id,)
                             ).fetchone()
                         conn.execute(
-                            "INSERT OR REPLACE INTO user_nodes (user_id, node_id, registered_at_us, is_primary) VALUES (?, ?, ?, 0)",
+                            "INSERT OR REPLACE INTO user_nodes (user_id, node_id, registered_at_us) VALUES (?, ?, ?)",
                             (user["id"], node_row["id"], now_us)
                         )
                         conn.commit()

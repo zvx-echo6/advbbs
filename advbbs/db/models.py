@@ -74,7 +74,6 @@ class UserNode:
     user_id: int = 0
     node_id: int = 0
     registered_at_us: int = 0
-    is_primary: bool = False
 
 
 @dataclass

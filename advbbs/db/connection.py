@@ -134,7 +134,6 @@ class Database:
                 user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 node_id         INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
                 registered_at_us INTEGER NOT NULL,
-                is_primary      INTEGER DEFAULT 0,
                 UNIQUE(user_id, node_id)
             );
             CREATE INDEX IF NOT EXISTS idx_user_nodes_user ON user_nodes(user_id);
