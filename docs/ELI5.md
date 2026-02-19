@@ -1,130 +1,79 @@
-# advBBS Explained Simply
+# advBBS — What It Is and How It Works
 
-## I know this stuff, how do I use it?
-Take a look at the [User Quickstart](https://github.com/zvx-echo6/advbbs/blob/main/docs/USER-QUICKSTART.md).
+## Already comfortable with the tech?
 
-## What is advBBS?
+Jump to the [User Quickstart](https://github.com/zvx-echo6/advbbs/blob/main/docs/USER-QUICKSTART.md) or the [Operator Quickstart](https://github.com/zvx-echo6/advbbs/blob/main/docs/quickstart.md).
 
-Think of advBBS like a **community bulletin board at a coffee shop**, but for radios.
+## The Short Version
 
-People can:
-- **Leave messages** for specific people (like putting a note in someones mailbox)
-- **Post on boards** for everyone to see (like pinning a flyer to the board)
-- **Read what others posted**
+advBBS is a bulletin board system that runs over Meshtastic. It adds persistent mail, message boards, user accounts, and multi-hop federation on top of the mesh — things Meshtastic's built-in messaging doesn't do.
 
-The difference? This works over **Meshtastic radios** - no internet, no cell towers, no monthly bills.
+You interact with it by DMing the BBS node from your Meshtastic app. Commands start with `!`.
 
-## How Does It Work?
+## What It Adds to Meshtastic
 
-### The Basics
+Meshtastic gives you real-time chat — great when everyone's online at the same time. advBBS fills the gaps:
 
-1. You have a **small radio** (Meshtastic device) in your pocket or backpack
-2. Somewhere nearby, someone is running **advBBS** on their radio
-3. You send a text message to that radio, like `!help`
-4. The BBS responds with a menu of things you can do
+**Persistent mail.** Send a message to someone who's offline. The BBS stores it. They pick it up later when they check in. No more "sorry, I wasn't on the mesh when you sent that."
 
-Its like texting, but the messages hop between radios instead of going through cell towers.
+**Bulletin boards.** Post to shared boards (`general`, `local`, or custom boards) that anyone on the BBS can read. Boards on federated nodes sync automatically — post on your BBS, it shows up on your peer's BBS.
 
-### Sending Mail
+**User accounts.** Register once, log in from any of your Meshtastic nodes. Your identity follows you across devices. Node-based 2FA means someone can't impersonate you even if they know your password — they also need one of your registered radios.
 
-Want to send a message to your friend Alice?
+**Encryption at rest.** Messages aren't stored in plaintext on the Pi. Everything is encrypted with keys derived from user passwords (Argon2id + ChaCha20-Poly1305). The BBS operator can't read your mail.
 
-```
-!send alice Hey, meet at the park at 3pm?
-```
+## Federation — BBS to BBS
 
-The BBS stores the message. When Alice checks her mail with `!mail`, shell see your note.
+This is where advBBS gets interesting. Multiple BBS nodes can peer with each other over the mesh and exchange mail and board posts.
 
-### Posting to Boards
+Addressing works like email: `!send alice@REMOTE1 Hey, are you coming Saturday?`
 
-Want to tell everyone about a community event?
+If REMOTE1 isn't a direct peer, advBBS routes through intermediate nodes automatically. RAP (Route Announcement Protocol) handles discovery — each BBS periodically shares its route table with peers, and the network converges on a map of who can reach whom. A four-node chain like this works without any manual route configuration:
 
 ```
-!post events Potluck dinner Saturday 6pm at the community center!
+Your BBS ←→ BBS-A ←→ BBS-B ←→ Destination BBS
 ```
 
-Anyone who runs `!read events` will see your post.
+You type one command. The routing, chunking, acknowledgment, and delivery confirmation all happen behind the scenes.
 
-## What About Other Towns?
+### Board Sync
 
-Heres where it gets cool.
+Sync-enabled boards (like `general`) automatically exchange posts between peers. When enough new posts accumulate (10 posts, or at least 1 post after an hour), the BBS batches them up and sends them to each peer. Posts from other BBSes show up with federated identity — `alice@REMOTE1` instead of just `alice` — so you know where they came from.
 
-Lets say:
-- Your town has **BBS-North**
-- The next town has **BBS-South**  
-- Theres a BBS in between called **BBS-Middle**
+Admins can enable sync on up to 2 custom boards beyond `general` (max 3 synced total). The `local` board never syncs by design, giving each BBS a space for community-specific content.
 
-Even though your radio cant reach BBS-South directly, advBBS figures out the path:
+## For Operators
 
-```
-Your Radio -> BBS-North -> BBS-Middle -> BBS-South
-```
+advBBS runs on anything that can run Python 3.10+ and connect to a Meshtastic node — a Raspberry Pi Zero 2 W is the typical deployment. Docker is the easiest path:
 
-This is called **federation**. The BBS systems talk to each other and pass messages along, like a chain of people passing a note across a room.
-
-## The "RAP" Thing
-
-RAP stands for **Route Announcement Protocol**. 
-
-Think of it like this: each BBS occasionally shouts "Hey, I can reach these other BBS systems!" 
-
-Other BBS nodes listen and build a mental map:
-- "Oh, BBS-North can reach BBS-Middle in 1 hop"
-- "And BBS-Middle can reach BBS-South in 1 hop"
-- "So I can reach BBS-South in 2 hops through them!"
-
-This happens automatically. You dont need to configure routes - the system figures it out.
-
-## Why Would I Use This?
-
-- **Camping/Hiking**: Stay in touch when theres no cell service
-- **Emergencies**: When the power and internet are down, radios still work
-- **Community**: Build a local communication network that doesnt depend on big companies
-- **Privacy**: Messages stay local, not stored on some companys servers
-- **Fun**: Its like ham radio but with a modern interface
-
-## Real Example
-
-**Setup**: 5 BBS nodes in a line, each only talks to its neighbors
-
-```
-BBS0 <-> BBS1 <-> BBS2 <-> BBS3 <-> BBS4
+```bash
+mkdir -p ./advbbs/data && cd advbbs
+curl -O https://raw.githubusercontent.com/zvx-echo6/advbbs/refs/heads/main/docker-compose.yml
+nano docker-compose.yml   # set your connection type, serial port or TCP host
+docker compose up -d
 ```
 
-**What happens**:
+Configuration is done through a web-based TUI at `http://<your-ip>:7681`. Federation requires both operators to add each other as peers in their config — it's a mutual whitelist, not open peering.
 
-1. User on BBS0 sends: `!send user4@B4 Hello from the other side!`
-2. BBS0 thinks: "B4? I dont know B4 directly, but BBS1 might..."
-3. Message hops: BBS0 -> BBS1 -> BBS2 -> BBS3 -> BBS4
-4. BBS4 stores the mail for user4
-5. Confirmation hops all the way back to BBS0: "Delivered!"
+## Mesh Etiquette
 
-The user on BBS0 just typed one command. All the routing happened automatically.
+advBBS is designed to be a good neighbor on the mesh. Federation traffic uses DMs (not channel broadcasts), messages are chunked to fit within Meshtastic's 237-byte payload limit, and rate limiting enforces minimum spacing between transmissions. Board sync batches posts rather than sending them one at a time. RAP uses conservative intervals (12-hour heartbeats, 24-hour route shares) to minimize airtime.
+
+The health of the mesh comes first. advBBS is built around that principle.
 
 ## Common Questions
 
-**Q: Do I need internet?**  
-A: No. Everything works over radio.
+**Does this replace Meshtastic's built-in messaging?**
+No. Use channel chat for real-time group conversation. Use advBBS for persistent mail, boards, and anything that needs to survive someone being offline.
 
-**Q: How far can messages go?**  
-A: Each radio hop can be several miles. Chain enough together and you can cover huge distances.
+**Can someone sniff my password over the air?**
+Registration and login commands go via Meshtastic DM. If your mesh channel has PSK encryption enabled (and it should), those DMs are encrypted in transit with AES-256. Without PSK, they're plaintext over the air. Always enable PSK.
 
-**Q: Is it private?**  
-A: Messages are stored only on the BBS systems involved. No cloud, no company servers. But radio transmissions can be received by anyone in range, so dont send secrets unless youre using encryption.
+**What happens if a relay node goes down?**
+RAP detects it within a few missed heartbeat cycles and marks the peer as unreachable, then dead. Routes through that node are removed. If an alternate path exists, the network reconverges on it automatically.
 
-**Q: Can I run my own BBS?**  
-A: Yes! You need a Meshtastic radio and a computer (even a Raspberry Pi works). See the [Quick Start Guide](quickstart.md).
+**Can I run multiple BBS nodes on the same mesh?**
+Yes — that's the entire point of federation. Each BBS has its own callsign, user base, and storage. They peer with each other to exchange mail and board posts.
 
-**Q: What if a BBS in the middle goes offline?**  
-A: The system notices within a few hours and stops trying to route through it. If theres another path, itll find it.
-
-## Summary
-
-advBBS turns a mesh of radios into a communication network with:
-
-- **Mailboxes** for private messages
-- **Bulletin boards** for public posts
-- **Automatic routing** so messages find their way
-- **No internet required**
-
-Its old-school BBS vibes with modern mesh networking.
+**What about restricted/private boards?**
+Restricted boards use per-board encryption keys. Only users explicitly granted access can read them. They never sync between BBS nodes because the encryption keys aren't shared across the federation.
