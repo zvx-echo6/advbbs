@@ -118,7 +118,7 @@ class ConfigTool:
                 "announcement_channel": 0,
                 "announcement_message": "",
                 "session_timeout_minutes": 30,
-                "reply_to_unknown_commands": True,
+                "reply_to_unknown_commands": False,
             },
             "database": {
                 "path": "/data/advbbs.db",
@@ -420,7 +420,7 @@ class ConfigTool:
             ann_msg = self._get("bbs", "announcement_message", "") or "(default)"
             table.add_row("10. Announcement Message", ann_msg[:40] + ("..." if len(ann_msg) > 40 else ""))
             table.add_row("11. Session Timeout", f"{self._get('bbs', 'session_timeout_minutes', 30)} minutes")
-            table.add_row("12. Reply to Unknown Cmds", self._status_icon(self._get("bbs", "reply_to_unknown_commands", True)))
+            table.add_row("12. Reply to Unknown Cmds", self._status_icon(self._get("bbs", "reply_to_unknown_commands", False)))
 
             console.print(table)
             console.print()
@@ -475,7 +475,7 @@ class ConfigTool:
                 value = IntPrompt.ask("Session timeout (minutes)", default=self._get("bbs", "session_timeout_minutes", 30))
                 self._set("bbs", "session_timeout_minutes", value)
             elif choice == 12:
-                current = self._get("bbs", "reply_to_unknown_commands", True)
+                current = self._get("bbs", "reply_to_unknown_commands", False)
                 self._set("bbs", "reply_to_unknown_commands", not current)
 
     def _change_password(self):
@@ -2159,15 +2159,13 @@ class ConfigTool:
         console.print("[green]Configuration saved![/green]")
         console.print()
 
-        # Write restart signal file
-        restart_file = Path("/tmp/advbbs_restart")
+        # Restart BBS via systemctl
+        import subprocess
         try:
-            restart_file.touch()
-            console.print("[cyan]BBS restart signal sent.[/cyan]")
-            console.print()
-            console.print("The BBS will restart momentarily to apply changes.")
+            subprocess.run(["systemctl", "restart", "advbbs"], check=True, capture_output=True)
+            console.print("[cyan]BBS restarted successfully.[/cyan]")
         except Exception as e:
-            console.print(f"[red]Failed to signal restart: {e}[/red]")
+            console.print(f"[red]Failed to restart BBS: {e}[/red]")
 
         Prompt.ask("\nPress Enter to continue")
 
@@ -2181,13 +2179,13 @@ class ConfigTool:
 
         console.print("[green]Configuration saved![/green]")
 
-        # Write restart signal file
-        restart_file = Path("/tmp/advbbs_restart")
+        # Restart BBS via systemctl
+        import subprocess
         try:
-            restart_file.touch()
-            console.print("[cyan]BBS restart signal sent.[/cyan]")
+            subprocess.run(["systemctl", "restart", "advbbs"], check=True, capture_output=True)
+            console.print("[cyan]BBS restarted successfully.[/cyan]")
         except Exception as e:
-            console.print(f"[red]Failed to signal restart: {e}[/red]")
+            console.print(f"[red]Failed to restart BBS: {e}[/red]")
 
         self.running = False
 

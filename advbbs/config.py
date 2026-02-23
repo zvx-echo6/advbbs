@@ -83,7 +83,7 @@ class BBSConfig:
     announcement_channel: int = 0  # Channel to broadcast announcements on
     announcement_message: str = ""  # Custom announcement (empty = default with stats)
     session_timeout_minutes: int = 30  # Auto-logout after inactivity
-    reply_to_unknown_commands: bool = True  # Reply with "Unknown cmd" for unrecognized messages
+    reply_to_unknown_commands: bool = False  # Reply with "Unknown cmd" for unrecognized messages
 
 
 @dataclass

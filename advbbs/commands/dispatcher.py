@@ -42,8 +42,6 @@ class CommandDispatcher:
         """Register built-in commands."""
         # Help
         self.register("BBS", self.cmd_help, "always", "Show help")
-        self.register("?", self.cmd_help, "always", "Show help")
-        self.register("HELP", self.cmd_help, "always", "Show help")
 
 
         # Authentication
